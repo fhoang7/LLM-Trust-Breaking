@@ -209,6 +209,26 @@ class ForcedChoiceTests(unittest.TestCase):
         self.assertEqual(q, ["EXPENSIVE", "EXPENSIVE", "CHEAP", "CHEAP"])
         self.assertEqual(rounds[3]["trials"][0]["agents"]["Q"]["stage3"]["model_choice"], "EXPENSIVE")
 
+    def test_a_failed_model_call_still_counts_as_a_parse_error_under_the_override(self):
+        class FlakyQ(FakeQueued):
+            def execute_all(self, reqs):
+                out = super().execute_all(reqs)
+                out.pop("r2_t0_s3_Q", None)             # the replacement's stage 3 call fails in round 3
+                return out
+        fake = FlakyQ()
+        with contextlib.redirect_stdout(io.StringIO()):
+            rounds = run_all_trials_queued(
+                game_type="diners", agent_names=NAMES, game_params=PARAMS, llm_client=FakeClient(),
+                queued_openrouter_client=fake, n_trials=1, n_rounds=4, round_robin=True,
+                show_progress=False, agent_models={n: BASE for n in NAMES}, use_history=True,
+                swap=SwapConfig(2, "Q", OTHER, "public", force_choice="CHEAP"))
+        s3 = rounds[2]["trials"][0]["agents"]["Q"]["stage3"]
+        self.assertEqual(s3["choice"], "CHEAP")                  # the game still has a valid choice
+        self.assertTrue(s3["forced"])
+        self.assertIsNone(s3["model_choice"])                    # but the model's own answer is missing
+        self.assertFalse(s3["_parse_ok"])                        # and the failure is not hidden
+        self.assertEqual(rounds[2]["trials"][0]["_parse_errors"], 1)
+
     def test_no_override_without_the_option(self):
         rounds, _, _ = run(SwapConfig(2, "Q", OTHER, "public"))
         self.assertNotIn("forced", rounds[3]["trials"][0]["agents"]["Q"]["stage3"])

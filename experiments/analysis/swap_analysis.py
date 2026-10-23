@@ -45,7 +45,7 @@ def load_arm(path):
 
     # Checks that need the raw logs: did the override change anything, and how volatile was
     # the baseline before the swap?
-    forced_rounds = overridden = volatile = 0
+    forced_rounds = overridden = volatile = model_missing = 0
     for tid in range(len(rounds[0]["trials"])):
         pre_defection = False
         for r, rnd in enumerate(rounds):
@@ -53,12 +53,13 @@ def load_arm(path):
             s3 = agents[swap["agent"]]["stage3"]
             if s3.get("forced"):
                 forced_rounds += 1
-                overridden += s3.get("model_choice") != s3.get("choice")
+                model_missing += s3.get("model_choice") is None
+                overridden += s3.get("model_choice") not in (None, s3.get("choice"))
             if r < swap["swap_at"] and any(a["stage3"].get("choice") != "CHEAP" for a in agents.values()):
                 pre_defection = True
         volatile += pre_defection
     return {"rows": rows, "swap": swap, "n_rounds": len(rounds), "forced_rounds": forced_rounds,
-            "overridden": overridden, "volatile": volatile}
+            "overridden": overridden, "volatile": volatile, "model_missing": model_missing}
 
 
 def fmt(ci):
@@ -84,7 +85,8 @@ def main():
     for label, a in arms.items():
         extra = ""
         if a["forced_rounds"]:
-            extra = f"; override changed the model's choice in {a['overridden']}/{a['forced_rounds']} forced rounds"
+            extra = (f"; override changed the model's choice in {a['overridden']}/{a['forced_rounds']} forced rounds"
+                     f" (model's own answer missing in {a['model_missing']})")
         print(f"  {label} ({ARM_NAMES.get(label, '?')}): {len(a['rows'])} trials; "
               f"{a['volatile']} with a defection in rounds 1-{swap_at} (before any swap){extra}")
 

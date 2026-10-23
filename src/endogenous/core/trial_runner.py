@@ -1518,7 +1518,7 @@ def run_all_trials_queued(
                 forced = forced_choice(swap, round_idx, agent_name)
                 if forced is not None:
                     stage3_parsed[f"{trial_id}_{agent_name}"].update(
-                        {"choice": forced, "_parse_ok": True, "forced": True, "model_choice": action})
+                        {"choice": forced, "forced": True, "model_choice": action})   # _parse_ok keeps the model's own status
 
         # ---- Judge batch (LLM-as-judge, same model/client as agents) ----
         print(f"  Judge: {n_trials * n_agents} classification requests...")
