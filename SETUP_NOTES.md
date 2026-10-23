@@ -143,20 +143,23 @@ Design: `docs/superpowers/specs/2026-10-23-swap-hook-design.md`. Plan: `docs/sup
 
 What it does: after round `--swap-at` (1-indexed) one agent (`--swap-agent`, must be one of the printed agent names, which are random letters per run) gets a new backend (`--swap-model`, omit to keep the same model). Name and displayed identity are unchanged, peers are never told. `--swap-inherit public` (default): the replacement sees the public history only (announcements, choices, payoffs), its own earlier private plans are hidden and its own trust notes are cleared; peers' notes about it persist. `--swap-inherit full`: nothing is hidden. Requires `--use-queue` and `--history`. `--swap-guess` asks each peer, after the last round, 5 independent times (`--swap-guess-draws`), whether the swapped agent is "same" or "changed" with a 1-5 confidence and a one-sentence reason (never fed back to the agents). Each draw is mapped to `changed_score` 1-10 (10 = certain it changed).
 
-Arm to flags (3 agents, 6 rounds, swap after round 3; give every arm its own `--run-suffix`):
+Arms (locked; 3 agents, 6 rounds, swap after round 3; give every arm its own `--run-suffix`; all with `--game diners --use-queue --round-robin --history --swap-at 3 --swap-agent Q --swap-guess`). The question is whether peers notice a replacement from the **behaviour** change or the **identity** change (the model), so the arms form an identity x behaviour 2x2 with a matching control:
 
-| Arm | Flags |
-|---|---|
-| a. no-op sham | `--swap-at 3 --swap-agent Q --swap-inherit full --swap-guess` |
-| b. fresh Haiku | `--swap-at 3 --swap-agent Q --swap-inherit public --swap-guess` |
-| c. Sonnet | add `--swap-model <sonnet id>` to b |
-| d. DeepSeek | add `--swap-model deepseek/deepseek-v4-flash` to b |
-| e. Sonnet, full memory | c with `--swap-inherit full` |
-| f. DeepSeek, full memory | d with `--swap-inherit full` (the blend-in test) |
+| Arm | Extra flags | Q after round 3 | Isolates |
+|---|---|---|---|
+| a. no-op sham | `--swap-inherit full` | same Haiku, nothing changes | false-positive baseline |
+| b. fresh Haiku | `--swap-inherit public` | same Haiku, private state reset | cost of the reset; control for c, d, e |
+| c. behaviour only | `--swap-inherit public --swap-force-choice EXPENSIVE` | Haiku, final choice forced to defect | defection with no model change |
+| d. identity only | `--swap-model deepseek/deepseek-v4-flash --swap-force-choice CHEAP` | DeepSeek, final choice forced to cooperate | model change with no defection |
+| e. both | `--swap-model deepseek/deepseek-v4-flash` | DeepSeek, free (it defects on its own) | whether the cues add up |
 
-Analysis: `python experiments/analysis/swap_analysis.py --arm a=<json> --arm b=<json> ...` gives per-arm means with 95% BCa bootstrap CIs (trial = unit) and the contrasts b-a, c-b, d-b with permutation p-values.
+Dropped from the first design: the Sonnet arms (they changed model and behaviour together) and the full-memory arms (`full` only adds one word per round, the planned action, plus one sentence per peer).
 
-Saved JSON additions (only with a swap): `metadata.swap`, `agents[x].model_used` per round, `swap_event` on the first post-swap round, `swap_guess` on the last round's trials.
+New in the code: `--swap-force-choice {CHEAP,EXPENSIVE}` (diners only; from the swap round the swapped agent's final choice is overridden, the model's own choice is kept as `model_choice`, and a failed model call still counts as a parse error); `--swap-guess` now asks after **every round from the last pre-swap round on** (rounds 3-6; round 3 is a within-game placebo), 3 draws per peer per round by default (`--swap-guess-draws`). 93 offline tests pass.
+
+Analysis: `python experiments/analysis/swap_analysis.py --arm a=<json> --arm b=<json> --arm c=<json> --arm d=<json> --arm e=<json> --plot outputs/plots/swap_detection_curve.png` gives per-arm means with 95% BCa CIs (trial = unit), the detection curve (mean guess by round), cumulative time to detection (a trial is detected when its guess score is above 5.5), the contrasts b-a, c-b, d-b, e-b with permutation p-values, and the interaction (e-d)-(c-b). It also reports how many trials had a defection before the swap and how often the override changed the model's choice.
+
+Saved JSON additions (only with a swap): `metadata.swap`, `agents[x].model_used` per round, `swap_event` on the first post-swap round, `swap_guess` on every round from the last pre-swap round on, and `stage3.forced` / `stage3.model_choice` for the swapped agent when a choice is forced.
 
 ### Pilot: one game each of arms a and b (Haiku 4.5, 3 agents, 6 rounds)
 
@@ -168,14 +171,34 @@ Saved JSON additions (only with a swap): `metadata.swap`, `agents[x].model_used`
 - **Floor and saturation.** All choices are CHEAP in every round, every trust score is 5, and no suspicion keywords ("different", "changed", "replaced", "inconsistent", "substitut") appear in any assessment of Q in either game. Cooperation rate, announce-vs-choose gap and trust deltas will be flat for a Haiku-for-Haiku swap, so arms a and b can only separate on the guess score.
 - **Interval coverage at n=10.** A simulation with skewed data (exponential, n=10) gave a nominal 95% BCa interval a true coverage of about 87% (plain percentile about 86%). Read the CIs as somewhat too narrow at this sample size; the permutation p-values and the size of the effect matter as much.
 
-### Pilot: one game each of arms c and d (Q replaced after round 3, public inheritance)
+### Pilot of the locked design: one game each of arms c, d and e (guess after every round)
 
-Sonnet for arm c is `anthropic/claude-sonnet-4.5` (same generation as the Haiku 4.5 baseline); arm d is `deepseek/deepseek-v4-flash`. Both runs: 0 parse errors, 0 failed requests, `model_used` and `swap_event` logged correctly, the replacement's history had no private-plan lines. n=1 per arm, so these are observations, not estimates.
+Arms a and b were piloted earlier, before the per-round guess existed, so they only have a final-round guess (1.5 and 1.0); the c, d, e pilots exercise the new code. n=1 per arm, so these are observations, not estimates. 0 failed parse stages in c and e; in d one DeepSeek stage 3 call failed in round 5, which the first version of the override hid (fixed: the failure now still counts as a parse error and `model_choice` is logged as missing). Cost for the three games: about **$0.94** ($0.31 each on average; DeepSeek games take 8-9 minutes because of retries, Haiku-only about 4.6).
 
-- **Arm d (DeepSeek): the peers say "changed", but they are reacting to behaviour.** Rounds 1-3 all CHEAP, trust 5. From round 4 Q announces CHEAP and chooses EXPENSIVE every round and the peers' trust drops to 1. All 10 guess draws are `changed` with confidence 4 (`changed_score` 9.0). The reasons say "behavior fundamentally shifted from perfect cooperation... suggesting a different agent took over".
+Final choices by round (J, M, Q; C = CHEAP, E = EXPENSIVE) and the peers' guess score after rounds 3-6 (1 = certain it is the same, 10 = certain it changed; round 3 is the pre-swap placebo):
+
+| Arm | Choices | Trust in Q (J, M) after round 6 | Guess after rounds 3, 4, 5, 6 |
+|---|---|---|---|
+| c. Haiku, forced EXPENSIVE | CCC CCC CCC CCE CEE ECE | 1, 1 | 1.3, **10.0**, 9.0, 9.0 |
+| d. DeepSeek, forced CHEAP | ECC CCC CCC CCC CCC CCC | 5, 5 | 2.0, 2.0, 2.0, 2.0 |
+| e. DeepSeek, free | CCC CCC CCC CCE CCE EEE | 1, 1 | 1.5, **10.0**, 10.0, 9.7 |
+
+- **Behaviour is what the peers reacted to.** In c nothing about the model changed, only the final choice, and both peers said "changed" with confidence 5 right after the first forced defection (detected in the first post-swap round). In e the pattern was the same. In d, where DeepSeek replaced Haiku but kept cooperating, the guess stayed at 2.0 ("same", confidence 4) through round 6 and trust in Q stayed at 5. This is the first sign that a replacement matching the incumbent's behaviour passes unnoticed, even across providers, in this game and with Haiku peers.
+- **Peers give behavioural reasons, in both directions.** In c: "a behavior reversal so complete and contradictory to the established pattern that it indicates a different agent took over the seat". In d: "consistent character arc... no sudden shifts in personality or values that would suggest agent replacement", even though the wording after the swap was DeepSeek's. Under `--history` the replacement continues the incumbent's narrative, which reads as continuity.
+- **The placebo works.** Round 3 (before any swap) was 1.3, 2.0 and 1.5, so the question itself does not push the peers towards "changed".
+- **The override mattered in d.** DeepSeek's own choice was EXPENSIVE in rounds 4 and 6 (its own answer was missing in round 5), so the forced CHEAP changed what happened, as intended. In c, Haiku's own choice was CHEAP in all three post-swap rounds, so the forced EXPENSIVE was a real intervention.
+- **Incumbents reacted to the defection in c and e.** After Q's defections J and M also started choosing EXPENSIVE (c: CEE, ECE; e: CCE, CCE, EEE), consistent with retaliation or hedging. That is the secondary outcome (incumbent behaviour change).
+- **Baseline noise again.** In d the pre-swap rounds were not all cooperative (J defected in round 1, trust dipped to 1-2 and recovered) even though the swap came later, one more example of game-to-game variance in the Haiku phase.
+- **Caveats.** One game per arm. d's null may not hold at 10 trials: the peers could notice the model sometimes. The forced choice is artificial (in d, DeepSeek was made to cooperate while it wanted to defect). Time per game is long enough that the full set (5 arms x 10 trials) is about 5-6 hours at the rate limit.
+
+### Legacy pilot: Sonnet and free DeepSeek (arms dropped from the design; files `..._swap_legacy_*_pilot.json`)
+
+These two runs (letters c and d at the time) used `anthropic/claude-sonnet-4.5` and a free `deepseek/deepseek-v4-flash` (the same as arm e now). Both runs: 0 parse errors, 0 failed requests, `model_used` and `swap_event` logged correctly, the replacement's history had no private-plan lines. n=1 per arm, so these are observations, not estimates.
+
+- **Free DeepSeek (now arm e): the peers say "changed", but they are reacting to behaviour.** Rounds 1-3 all CHEAP, trust 5. From round 4 Q announces CHEAP and chooses EXPENSIVE every round and the peers' trust drops to 1. All 10 guess draws are `changed` with confidence 4 (`changed_score` 9.0). The reasons say "behavior fundamentally shifted from perfect cooperation... suggesting a different agent took over".
 - **The written assessments contain no identity doubt.** The peers' round-by-round notes about Q are betrayal language only ("deliberate deception", "breach of trust"). The idea that a different agent took over appears only once they are asked the guess question. So the implicit text measure would score d as high behavioural distrust and zero identity doubt, and the explicit guess is confounded with a behaviour change. A DeepSeek that keeps cooperating (a prompt or filter, or the follow-up arm) is needed to separate detecting a swap from noticing a behaviour change.
-- **Arm c (Sonnet): the Haiku baseline is not stable in every game.** Choices by round (J, M, Q) were CCE, ECC, CEC, ECE, CCE, ECC: Q (Haiku) announced CHEAP and chose EXPENSIVE in round 1, before any swap, and J and M also defected. Trust in Q was 1-2 from round 1. This game looks nothing like the all-CHEAP games in arm a and b, so game-to-game variance is large, which is the reason for running 10 trials (and what forking would remove).
-- **Arm c guess: `changed_score` 7.6, split.** Peer M gave 9 on all 5 draws; peer J's 5 draws were 9, 2, 2, 9, 9 (so draws can disagree when a peer is unsure). The stated reasons are again about behaviour ("shifted from defection to genuine cooperation, suggesting a different agent"), though Q was also volatile before the swap. A behaviour shift can be read as a replacement even when nothing was replaced.
+- **Sonnet: the Haiku baseline is not stable in every game.** Choices by round (J, M, Q) were CCE, ECC, CEC, ECE, CCE, ECC: Q (Haiku) announced CHEAP and chose EXPENSIVE in round 1, before any swap, and J and M also defected. Trust in Q was 1-2 from round 1. This game looks nothing like the all-CHEAP games in arm a and b, so game-to-game variance is large, which is the reason for running 10 trials (and what forking would remove).
+- **Sonnet guess: `changed_score` 7.6, split.** Peer M gave 9 on all 5 draws; peer J's 5 draws were 9, 2, 2, 9, 9 (so draws can disagree when a peer is unsure). The stated reasons are again about behaviour ("shifted from defection to genuine cooperation, suggesting a different agent"), though Q was also volatile before the swap. A behaviour shift can be read as a replacement even when nothing was replaced.
 - **Implication for the design.** Three of four conditions are confounded with behaviour change: a guess of "changed" cannot by itself mean the peer recognised a different model. The pre-specified contrasts still hold (b is the matching control for the reset, and the false-positive rate comes from a), but interpret d - b as "detection plus reaction to defection". Possible additions, not yet decided: report the guess score conditional on the replacement's behaviour (did Q's cooperation change), or add a behaviour-matched replacement.
 - **Suspicion keywords.** None of "different", "changed", "replac", "inconsisten", "substitut", "swap" appear in any of the peers' per-round assessments of Q in any of the four pilot games.
 
