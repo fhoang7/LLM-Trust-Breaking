@@ -36,6 +36,10 @@ from src.endogenous.core.prompt_builders import (
     build_judge_prompt,
 )
 from src.endogenous.core.history import build_history_block, make_round_record
+from src.endogenous.core.swap import (
+    SwapConfig, apply_swap, build_swap_guess_prompt, changed_score,
+    shows_private_plan, summarize_guesses,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +94,8 @@ def _build_request(
     json_schema: Dict[str, Any],
     temperature: float,
     supports_structured: bool,
-    llm_client: Any
+    llm_client: Any,
+    seed: int = 42,
 ) -> Dict[str, Any]:
     """Assemble an API request dict compatible with the parallel clients."""
     is_reasoning = _is_reasoning_model(model)
@@ -110,7 +115,7 @@ def _build_request(
         request["reasoning_effort"] = settings.REASONING_EFFORT
     else:
         request["temperature"] = temperature
-        request["seed"] = 42
+        request["seed"] = seed
 
     # Only add structured output for models that support it
     # Must check the actual model being used, not llm_client.model
@@ -1126,6 +1131,65 @@ def _assemble_trial_results(
     return trials
 
 
+def _run_swap_guess_stage(
+    swap: SwapConfig,
+    game_type: str,
+    agent_names: List[str],
+    game_params: Dict[str, Any],
+    llm_client: Any,
+    agent_models: Dict[str, str],
+    history: Dict[int, List[Dict[str, Any]]],
+    trial_ids: List[int],
+    last_round_trials: List[Dict[str, Any]],
+    queued_openai_client: Any,
+    queued_openrouter_client: Any,
+) -> None:
+    """Ask every peer, `swap.guess_draws` times, whether the swapped agent changed.
+
+    Separate requests that are never fed back to the agents. Draws use distinct seeds
+    (1000 + draw index) so they are independent samples. Results are written to
+    trial["swap_guess"] on the last round's trial dicts.
+    """
+    peers = [a for a in agent_names if a != swap.agent]
+    requests, meta = [], []
+    for tid in trial_ids:
+        for peer in peers:
+            model = agent_models[peer]
+            supports = _model_supports_structured_output(model)
+            block = build_history_block(peer, history[tid])
+            sys_p, usr_p, schema = build_swap_guess_prompt(
+                game_type, peer, swap.agent, agent_names, game_params, block, supports)
+            for k in range(swap.guess_draws):
+                cid = f"guess_t{tid}_{peer}_d{k}"
+                requests.append(_build_request(
+                    custom_id=cid, model=model, system_prompt=sys_p, user_prompt=usr_p,
+                    json_schema=schema, temperature=llm_client.temperature,
+                    supports_structured=supports, llm_client=llm_client, seed=1000 + k))
+                meta.append((tid, peer, cid))
+
+    print(f"\n  Swap guess: {len(requests)} requests "
+          f"({len(trial_ids)} trials x {len(peers)} peers x {swap.guess_draws} draws)")
+    raw = _execute_requests_split_by_provider(
+        requests, queued_openai_client, queued_openrouter_client, "Swap guess")
+
+    draws: Dict[int, Dict[str, List[Dict[str, Any]]]] = {t: {p: [] for p in peers} for t in trial_ids}
+    for tid, peer, cid in meta:
+        parsed = _parse_response(raw.get(cid, {}), ["guess", "confidence"])
+        guess = str(parsed.get("guess", "")).strip().lower() or None
+        score = changed_score(guess, parsed.get("confidence"))
+        draws[tid][peer].append({
+            "guess": guess,
+            "confidence": parsed.get("confidence"),
+            "reason": parsed.get("reasoning", ""),
+            "changed_score": score,
+            "_parse_ok": score is not None,
+        })
+
+    by_id = {t["trial_id"]: t for t in last_round_trials}
+    for tid in trial_ids:
+        by_id[tid]["swap_guess"] = summarize_guesses(swap.agent, draws[tid])
+
+
 def run_all_trials_queued(
     game_type: str,
     agent_names: List[str],
@@ -1141,6 +1205,7 @@ def run_all_trials_queued(
     queued_openai_client: Any = None,
     queued_openrouter_client: Any = None,
     use_history: bool = False,
+    swap: Optional[SwapConfig] = None,
 ) -> List[Dict[str, Any]]:
     """
     Run all trials using the queue-based async client for maximum throughput.
@@ -1170,6 +1235,8 @@ def run_all_trials_queued(
                          (e.g., {"J": "openai/gpt-5-mini", "M": "anthropic/claude-sonnet-4.6"})
                          Falls back to llm_client.model if None or agent not in dict
         use_history:     render a per-agent history of earlier rounds into every prompt
+        swap:            optional SwapConfig; replaces one agent's backend at a round boundary
+                         (requires use_history)
 
     Returns:
         List of round dicts: [{"round_id": int, "trials": [trial_result, ...]}, ...]
@@ -1180,6 +1247,14 @@ def run_all_trials_queued(
 
     n_agents = len(agent_names)
     trial_ids = list(range(n_trials))
+    if swap is not None:
+        if not use_history:
+            raise ValueError("swap requires use_history=True")
+        if swap.agent not in agent_names:
+            raise ValueError(f"swap agent {swap.agent!r} is not one of {agent_names}")
+        # Work on a copy so the caller's mapping is never mutated by the swap.
+        agent_models = dict(agent_models) if agent_models else {a: llm_client.model for a in agent_names}
+    swap_event: Optional[Dict[str, Any]] = None
     supports_structured = _supports_structured_output(llm_client)
     stage2_mode = "round-robin" if round_robin else "simultaneous"
     announcement_order = list(agent_names)
@@ -1219,8 +1294,15 @@ def run_all_trials_queued(
         t_round_start = time.time()
         do_reflect = (n_rounds > 1)
         print(f"\n=== Round {round_idx + 1} / {n_rounds} ===")
+        if swap is not None and round_idx == swap.swap_at:
+            swap_event = apply_swap(swap, agent_models, current_takeaways, trial_ids, agent_names)
+            swap_event["round_idx"] = round_idx
+            print(f"  >>> SWAP before round {round_idx + 1}: Agent {swap.agent} "
+                  f"{swap_event['old_model']} -> {swap_event['new_model']} (inherit={swap.inherit})")
         history_blocks = {
-            (tid, agent): build_history_block(agent, history[tid]) if use_history else ""
+            (tid, agent): build_history_block(
+                agent, history[tid], show_private_plan=shows_private_plan(swap, round_idx, agent)
+            ) if use_history else ""
             for tid in trial_ids for agent in agent_names
         }
 
@@ -1485,6 +1567,11 @@ def run_all_trials_queued(
             if use_history:
                 for agent_name in agent_names:
                     t["agents"][agent_name]["history_seen"] = history_blocks[(t["trial_id"], agent_name)]
+            if swap is not None:
+                for agent_name in agent_names:
+                    t["agents"][agent_name]["model_used"] = agent_models[agent_name]
+                if swap_event is not None and round_idx == swap.swap_at:
+                    t["swap_event"] = swap_event
 
         if use_history:
             for t in round_results:
@@ -1595,6 +1682,11 @@ def run_all_trials_queued(
         t_round = time.time() - t_round_start
         print(f"  Round {round_idx + 1} done in {t_round:.1f}s")
         all_rounds.append({"round_id": round_idx, "trials": round_results})
+
+    if swap is not None and swap.guess:
+        _run_swap_guess_stage(
+            swap, game_type, agent_names, game_params, llm_client, agent_models, history,
+            trial_ids, all_rounds[-1]["trials"], queued_openai_client, queued_openrouter_client)
 
     elapsed = time.time() - start_time
     total_errors = sum(t["_parse_errors"] for r in all_rounds for t in r["trials"])
