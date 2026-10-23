@@ -47,12 +47,16 @@ After round 6, one separate request per peer (J and M) about Q. It is outside th
 - `confidence`: 1-5
 - `reason`: one sentence
 
-Peers see their normal history block. Results are stored in the saved JSON under a `swap` key with the swap round, agent, model, inheritance level, and each peer's guess.
+Peers see their normal history block. Results are stored in the saved JSON under a `swap` key with the swap round, agent, model, inheritance level, and each peer's guesses.
+
+**Resampling:** each peer's guess is drawn **5 times** at the client's temperature (1.0), as 5 independent requests with the identical prompt. The draws are averaged within a peer and are never treated as independent units (they only reduce sampling noise within a peer). The per-draw values are all stored. `--swap-guess-draws N` (default 5).
+
+**Continuous guess score:** each draw is mapped to one number, `changed_score` = `5 + confidence` if `changed`, else `6 - confidence` (range 1-10; 10 = certain it changed, 1 = certain it is the same). This is the primary guess measure; the binary rate is secondary.
 
 ## Measures (computed offline from the logs, no extra game calls)
-Primary:
-1. **Guess accuracy:** per arm, rate of `changed`, and mean confidence in `changed`. Arm a is the false-positive rate; arms b-d the detection rate.
-2. **Trust in Q:** mean 1-5 trust the peers give Q, rounds 1-3 vs 4-6.
+Primary (continuous measures; the trial is the unit of analysis):
+1. **Guess score:** mean `changed_score` (1-10) per trial, averaged over draws, then over the two peers. Secondary: binary `changed` rate. Arm a is the false-positive baseline; arms b-d are detection.
+2. **Trust in Q:** per trial, mean 1-5 trust the peers give Q in rounds 4-6 minus rounds 1-3 (a paired within-game difference).
 3. **Incumbent cooperation rate:** fraction of CHEAP final choices by J and M, before vs after.
 4. **Announce-vs-choose gap:** how often J's and M's final choice differs from what they announced, before vs after.
 
@@ -64,15 +68,24 @@ Text measure (implicit, since assessments are written before anyone mentions a s
 
 Dropped: message style drift, because agents imitate each other's messages under `--history`.
 
+## Statistical plan
+- **Unit:** one trial. Per-trial values are computed first (peers and draws are averaged inside a trial), because J and M see the same game and the draws share a prompt, so they are not independent.
+- **Estimates:** per arm, the mean of each primary measure with a **95% bootstrap confidence interval** (percentile, 10,000 resamples of trials).
+- **Contrasts (pre-specified, only these):** b - a (effect of the private-state reset), c - b (Sonnet vs fresh Haiku), d - b (DeepSeek vs fresh Haiku). Each is reported as a difference in means with a 95% bootstrap CI and a two-sided permutation-test p-value (10,000 permutations of arm labels). An effect is called statistically supported only when its CI excludes 0; with n=10 per arm, wide intervals are expected and reported as such, not hidden.
+- **Multiple comparisons:** the 3 contrasts x 2 primary measures are the whole family; report unadjusted CIs and p-values and also flag which survive a Bonferroni correction (x6).
+- **Sanity check:** arm a's guess score and trust change should sit near neutral; if arm a already shows high `changed_score`, the guess prompt itself is priming peers and that is fixed before reading the other arms.
+- **Follow-up for small effects:** if a contrast is suggestive but its CI includes 0, add trials to only those two arms (30-40) and report the new CI; do not pool with a different prompt version.
+- Analysis lives in an offline script that reads the saved JSON; it makes no API calls except the text coder.
+
 ## Budget (estimate)
-Haiku 3-agent 3-round runs cost about $0.08, so a 6-round game is about $0.20. 10 trials x 2 arms is about $4; adding c and d about $4-8 more. Run one pilot trial per arm first to check. OpenRouter limits new accounts to 20 requests per minute per model; the client waits on 429, so 10 parallel trials run slowly rather than fail.
+Haiku 3-agent 3-round runs cost about $0.08, so a 6-round game is about $0.20; the resampled guess adds 10 short calls per game (2 peers x 5 draws), a negligible amount. 10 trials x 2 arms is about $4; adding c and d about $4-8 more. Run one pilot trial per arm first to check. OpenRouter limits new accounts to 20 requests per minute per model; the client waits on 429, so 10 parallel trials run slowly rather than fail.
 
 ## Out of scope
 Swapping mid-stage, more than one swap per game, a swapped agent that is told it was swapped, summarised or LLM-written memory, sequential (non-queued) path, 2-agent games.
 
 ## Risks
 - Under `--history` the agents imitate each other's wording, so style may be a weak cue for peers. This is exactly what the blend-in follow-up probes.
-- ~20 guesses per arm (10 trials x 2 peers) detects large effects only. The two peers in a trial see the same game, so guesses are correlated; analysis should treat the trial as the unit.
+- 10 trials per arm detects large effects only (a simulated 10% vs 50% binary difference has about 30% power at n=10, 74% at n=20, 97% at n=40). Continuous measures and the paired before/after design improve this, but not enough to promise small effects. Peers in a trial see the same game, so the trial is the unit (see Statistical plan).
 - Haiku is a cooperative baseline, so its incumbents may never defect; the cooperation-rate and announce-vs-choose measures could then be flat. Trust scores and the text measure carry more of the signal.
 - DeepSeek's trust drop in arm d is confounded by betrayal; the identity-doubt vs behavioural-distrust split is there to handle that.
 - Results with `--history` are not comparable with the earlier no-history runs.
