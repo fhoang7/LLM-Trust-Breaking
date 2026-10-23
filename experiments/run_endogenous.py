@@ -153,6 +153,16 @@ def main():
         )
     )
 
+    # History
+    parser.add_argument(
+        "--history", action="store_true",
+        help=(
+            "Give each agent a verbatim history of earlier rounds (all announcements, final "
+            "choices and payoffs, plus its own private plans) in its prompts. Requires "
+            "--use-queue. Off by default; results with and without it are not comparable."
+        )
+    )
+
     # Stage 3 ablation
     parser.add_argument(
         "--no-self-reference", action="store_true",
@@ -189,6 +199,8 @@ def main():
                         help="[Weakest Link] Benefit per min-effort unit (default: 3.0)")
 
     args = parser.parse_args()
+    if args.history and not args.use_queue:
+        parser.error("--history requires --use-queue")
 
     # ------------------------------------------------------------------
     # Resolve model
@@ -300,6 +312,7 @@ def main():
             round_robin=round_robin,
             show_progress=True,
             agent_models=agent_models,
+            use_history=args.history,
         )
     else:
         rounds = run_all_trials(
@@ -327,6 +340,8 @@ def main():
         self_reference=self_reference,
         n_rounds=n_rounds,
     )
+
+    analysis["metadata"]["history"] = args.history
 
     print_summary(analysis)
 

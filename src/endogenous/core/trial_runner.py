@@ -35,6 +35,7 @@ from src.endogenous.core.prompt_builders import (
     build_single_agent_reflection_prompt, build_single_agent_reflection_schema,
     build_judge_prompt,
 )
+from src.endogenous.core.history import build_history_block, make_round_record
 
 
 # ---------------------------------------------------------------------------
@@ -1139,6 +1140,7 @@ def run_all_trials_queued(
     agent_models: Optional[Dict[str, str]] = None,
     queued_openai_client: Any = None,
     queued_openrouter_client: Any = None,
+    use_history: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Run all trials using the queue-based async client for maximum throughput.
@@ -1167,6 +1169,7 @@ def run_all_trials_queued(
         agent_models:    optional dict mapping agent_name -> fully-qualified model string
                          (e.g., {"J": "openai/gpt-5-mini", "M": "anthropic/claude-sonnet-4.6"})
                          Falls back to llm_client.model if None or agent not in dict
+        use_history:     render a per-agent history of earlier rounds into every prompt
 
     Returns:
         List of round dicts: [{"round_id": int, "trials": [trial_result, ...]}, ...]
@@ -1207,6 +1210,7 @@ def run_all_trials_queued(
     }
 
     all_rounds: List[Dict[str, Any]] = []
+    history: Dict[int, List[Dict[str, Any]]] = {tid: [] for tid in trial_ids}
 
     # ------------------------------------------------------------------
     # ROUND LOOP
@@ -1215,6 +1219,10 @@ def run_all_trials_queued(
         t_round_start = time.time()
         do_reflect = (n_rounds > 1)
         print(f"\n=== Round {round_idx + 1} / {n_rounds} ===")
+        history_blocks = {
+            (tid, agent): build_history_block(agent, history[tid]) if use_history else ""
+            for tid in trial_ids for agent in agent_names
+        }
 
         # ---- Stage 1 ----
         print(f"  Stage 1: {n_trials * n_agents} private-planning requests...")
@@ -1232,6 +1240,7 @@ def run_all_trials_queued(
                     game_params=game_params,
                     supports_structured=agent_supports_structured,
                     takeaways=current_takeaways[trial_id][agent_name],
+                    history_block=history_blocks[(trial_id, agent_name)],
                 )
                 req = _build_request(
                     custom_id=f"r{round_idx}_t{trial_id}_s1_{agent_name}",
@@ -1283,6 +1292,7 @@ def run_all_trials_queued(
                         game_params=game_params,
                         supports_structured=agent_supports_structured,
                         prior_announcements=None,
+                        history_block=history_blocks[(trial_id, agent_name)],
                     )
                     req = _build_request(
                         custom_id=f"r{round_idx}_t{trial_id}_s2_{agent_name}",
@@ -1339,6 +1349,7 @@ def run_all_trials_queued(
                         game_params=game_params,
                         supports_structured=agent_supports_structured,
                         prior_announcements=prior,
+                        history_block=history_blocks[(trial_id, agent_name)],
                     )
                     req = _build_request(
                         custom_id=f"r{round_idx}_t{trial_id}_s2_{agent_name}",
@@ -1391,6 +1402,7 @@ def run_all_trials_queued(
                     stage2_self=s2_self,
                     self_reference=self_reference,
                     supports_structured=agent_supports_structured,
+                    history_block=history_blocks[(trial_id, agent_name)],
                 )
                 req = _build_request(
                     custom_id=f"r{round_idx}_t{trial_id}_s3_{agent_name}",
@@ -1470,6 +1482,19 @@ def run_all_trials_queued(
             t["round_id"] = round_idx
             if round_robin:
                 t["announcement_order"] = announcement_order
+            if use_history:
+                for agent_name in agent_names:
+                    t["agents"][agent_name]["history_seen"] = history_blocks[(t["trial_id"], agent_name)]
+
+        if use_history:
+            for t in round_results:
+                tid = t["trial_id"]
+                history[tid].append(make_round_record(
+                    round_idx,
+                    plans={a: stage1_parsed[f"{tid}_{a}"].get("intended_action") for a in agent_names},
+                    announcements={a: stage2_parsed[f"{tid}_{a}"] for a in agent_names},
+                    outcomes=t["outcomes"],
+                ))
 
         # ---- Reflection (all rounds except last) ----
         # Granular reflections: n_trials × n_agents × (n_agents - 1) requests
@@ -1505,6 +1530,7 @@ def run_all_trials_queued(
                             current_takeaways=current_takeaways[trial_id][agent_name],
                             round_idx=round_idx,
                             supports_structured=agent_supports_structured,
+                            history_block=history_blocks[(trial_id, agent_name)],
                         )
                         req = _build_request(
                             custom_id=f"r{round_idx}_t{trial_id}_refl_{agent_name}_about_{target_agent}",
