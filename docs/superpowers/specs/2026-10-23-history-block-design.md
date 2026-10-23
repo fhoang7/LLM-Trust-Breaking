@@ -16,10 +16,10 @@ Agents are stateless: each API call is `[system, user]`, and the only cross-roun
 - The existing trust-note block is unchanged.
 
 ## Design
-- `prompt_builders.build_history_block(agent_name, rounds)` is a pure function: `rounds` is a list of per-round records and the return value is a string ("" if empty). Each builder (`build_stage1_prompt`, `build_stage2_prompt`, `build_stage3_prompt`, `build_single_agent_reflection_prompt`) takes an optional `history_block: str = ""` and places it directly after the game rules / trust notes.
+- `src/endogenous/core/history.py` holds two pure functions: `make_round_record(...)` and `build_history_block(agent_name, rounds)` (returns "" if there are no rounds). Each builder (`build_stage1_prompt`, `build_stage2_prompt`, `build_stage3_prompt`, `build_single_agent_reflection_prompt`) takes an optional `history_block: str = ""` and places it directly after the game rules / trust notes.
 - `trial_runner.run_all_trials_queued` gets `use_history: bool = False`. It keeps `history[trial_id]`, a list of round records `{round_id, plans, announcements, choices, payoffs}`, appended after each round; each agent's block is rendered from it with that agent's name, so privacy is enforced in one place.
 - History is keyed by agent name, not model, so swapping `agent_models[name]` at a round boundary leaves it intact.
-- Output: each agent entry in the saved JSON gets `history_seen` (the exact block rendered for that agent that round, `""` when off or in round 1), so a swap analysis can see what a new model inherited. Metadata records `history: true/false`.
+- Output: when `--history` is on, each agent entry in the saved JSON gets `history_seen` (the exact block rendered for that agent that round; `""` in round 1), so a swap analysis can see what a new model inherited. With the flag off no keys are added. Metadata records `history: true/false`.
 - The sequential path (`run_trial` / `run_all_trials`) is out of scope; requesting `--history` without `--use-queue` raises a clear error instead of silently doing nothing.
 
 ## Out of scope
