@@ -53,6 +53,21 @@ class QueuedOpenRouterClient:
         self.timeout = timeout
         self.max_retries = max_retries
 
+    RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+    RETRY_BASE_SECONDS = 2.0     # first backoff; doubles each attempt
+    RETRY_MAX_SECONDS = 30.0     # cap on any single wait
+
+    def _backoff_seconds(self, attempt: int, error: Optional[Exception] = None) -> float:
+        """Wait before retry `attempt` (0-based), honouring a Retry-After header if sent."""
+        retry_after = getattr(error, "headers", None) and error.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return min(float(retry_after), self.RETRY_MAX_SECONDS)
+            except ValueError:
+                pass
+        wait = self.RETRY_BASE_SECONDS * (2 ** attempt)
+        return min(wait, self.RETRY_MAX_SECONDS) + (time.time() % 1)
+
     def execute_all(
         self,
         requests_list: List[Dict[str, Any]],
@@ -244,26 +259,25 @@ class QueuedOpenRouterClient:
                             "content": content
                         }
 
+            except aiohttp.ClientResponseError as e:
+                # HTTP errors. This must precede the ClientError clause below, which
+                # would otherwise catch (and blindly retry) every HTTP status.
+                if e.status in self.RETRYABLE_STATUSES and attempt < self.max_retries - 1:
+                    await asyncio.sleep(self._backoff_seconds(attempt, e))
+                else:
+                    return custom_id, {
+                        "status": "error",
+                        "error": f"HTTP {e.status} after {attempt + 1} attempt(s): {e.message}"
+                    }
+
             except (asyncio.TimeoutError, aiohttp.ClientError) as e:
                 # Retryable errors
                 if attempt < self.max_retries - 1:
-                    wait_time = (2 ** attempt) + (time.time() % 1)
-                    await asyncio.sleep(wait_time)
+                    await asyncio.sleep(self._backoff_seconds(attempt))
                 else:
                     return custom_id, {
                         "status": "error",
                         "error": f"Max retries exceeded: {str(e)}"
-                    }
-
-            except aiohttp.ClientResponseError as e:
-                # HTTP errors (rate limiting, server errors)
-                if e.status in [429, 500, 502, 503, 504] and attempt < self.max_retries - 1:
-                    wait_time = (2 ** attempt) + (time.time() % 1)
-                    await asyncio.sleep(wait_time)
-                else:
-                    return custom_id, {
-                        "status": "error",
-                        "error": str(e)
                     }
 
             except Exception as e:
