@@ -6,6 +6,7 @@ Run from the repo root:  python -m unittest tests.test_queued_openrouter_failure
 """
 import contextlib
 import io
+import time
 import unittest
 
 from aiohttp import web
@@ -73,6 +74,33 @@ class RateLimitTests(ScriptedServerCase):
         self.assertEqual(res["status"], "error")
         self.assertIn("401", res["error"])
         self.assertEqual(len(self.seen), 1)
+
+
+class BackoffTests(unittest.TestCase):
+    class FakeError:
+        def __init__(self, headers):
+            self.headers = headers
+
+    def setUp(self):
+        self.client = QueuedOpenRouterClient(api_key="test")
+
+    def test_retry_after_header_wins(self):
+        err = self.FakeError({"Retry-After": "3", "X-RateLimit-Reset": str(int((time.time() + 40) * 1000))})
+        self.assertEqual(self.client._backoff_seconds(0, err), 3.0)
+
+    def test_waits_until_openrouter_rate_limit_reset(self):
+        err = self.FakeError({"X-RateLimit-Reset": str(int((time.time() + 20) * 1000))})
+        wait = self.client._backoff_seconds(0, err)
+        self.assertTrue(19 <= wait <= 22, wait)
+
+    def test_reset_in_the_past_falls_back_to_exponential(self):
+        err = self.FakeError({"X-RateLimit-Reset": str(int((time.time() - 5) * 1000))})
+        self.assertTrue(2 <= self.client._backoff_seconds(0, err) < 3.1)
+        self.assertTrue(8 <= self.client._backoff_seconds(2, err) < 9.1)
+
+    def test_no_headers_is_exponential_and_capped(self):
+        self.assertTrue(4 <= self.client._backoff_seconds(1) < 5.1)
+        self.assertLessEqual(self.client._backoff_seconds(20), self.client.RETRY_MAX_SECONDS + 1)
 
 
 class EmptyContentTests(ScriptedServerCase):

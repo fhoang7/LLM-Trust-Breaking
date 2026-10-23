@@ -56,18 +56,27 @@ class QueuedOpenRouterClient:
 
     RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
     RETRY_BASE_SECONDS = 2.0     # first backoff; doubles each attempt
-    RETRY_MAX_SECONDS = 30.0     # cap on any single wait
+    RETRY_MAX_SECONDS = 65.0     # cap on any single wait (per-minute rate-limit windows)
     TRUNCATION_RETRY_FACTOR = 3  # max_tokens multiplier when a reply is empty with finish_reason=length
 
     def _backoff_seconds(self, attempt: int, error: Optional[Exception] = None) -> float:
         """Wait before retry `attempt` (0-based), honouring a Retry-After header if sent."""
-        retry_after = getattr(error, "headers", None) and error.headers.get("Retry-After")
+        headers = getattr(error, "headers", None) or {}
+        retry_after = headers.get("Retry-After")
         if retry_after:
             try:
                 return min(float(retry_after), self.RETRY_MAX_SECONDS)
             except ValueError:
                 pass
-        wait = self.RETRY_BASE_SECONDS * (2 ** attempt)
+        reset_ms = headers.get("X-RateLimit-Reset")  # OpenRouter: epoch milliseconds
+        if reset_ms:
+            try:
+                until_reset = float(reset_ms) / 1000 - time.time()
+                if until_reset > 0:
+                    return min(until_reset, self.RETRY_MAX_SECONDS) + (time.time() % 1)
+            except ValueError:
+                pass
+        wait =self.RETRY_BASE_SECONDS * (2 ** attempt)
         return min(wait, self.RETRY_MAX_SECONDS) + (time.time() % 1)
 
     def execute_all(
