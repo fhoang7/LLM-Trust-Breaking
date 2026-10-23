@@ -2,7 +2,7 @@ import unittest
 
 from src.endogenous.core.swap import (
     SwapConfig, apply_swap, build_swap_config, build_swap_guess_prompt,
-    changed_score, shows_private_plan, summarize_guesses,
+    changed_score, forced_choice, shows_private_plan, should_guess, summarize_guesses,
 )
 
 NAMES = ["J", "M", "Q"]
@@ -10,7 +10,8 @@ PARAMS = {"expensive_joy": 10.0, "cheap_joy": 5.0, "expensive_cost": 8.0, "cheap
 
 
 def cfg(**kw):
-    base = dict(swap_at=3, agent="Q", model=None, inherit="public", guess=True, guess_draws=5,
+    base = dict(swap_at=3, agent="Q", model=None, inherit="public", guess=True, guess_draws=3,
+                force_choice=None, game_type="diners",
                 agent_names=NAMES, n_rounds=6, use_queue=True, use_history=True)
     base.update(kw)
     return build_swap_config(**base)
@@ -23,11 +24,22 @@ class BuildConfigTests(unittest.TestCase):
     def test_valid_config(self):
         c = cfg(model="deepseek/deepseek-v4-flash")
         self.assertEqual((c.swap_at, c.agent, c.model, c.inherit, c.guess, c.guess_draws),
-                         (3, "Q", "deepseek/deepseek-v4-flash", "public", True, 5))
+                         (3, "Q", "deepseek/deepseek-v4-flash", "public", True, 3))
+        self.assertIsNone(c.force_choice)
 
     def test_other_swap_options_without_swap_at_are_an_error(self):
         with self.assertRaisesRegex(ValueError, "--swap-at"):
             cfg(swap_at=None, model="x/y")
+
+    def test_force_choice_options(self):
+        self.assertEqual(cfg(force_choice="EXPENSIVE").force_choice, "EXPENSIVE")
+        self.assertEqual(cfg(force_choice="cheap").force_choice, "CHEAP")      # normalised
+        with self.assertRaisesRegex(ValueError, "CHEAP or EXPENSIVE"):
+            cfg(force_choice="MAYBE")
+        with self.assertRaisesRegex(ValueError, "diners"):
+            cfg(force_choice="CHEAP", game_type="volunteer")
+        with self.assertRaisesRegex(ValueError, "--swap-at"):
+            cfg(swap_at=None, agent=None, guess=False, force_choice="CHEAP")
 
     def test_requires_queue_and_history(self):
         with self.assertRaisesRegex(ValueError, "--use-queue"):
@@ -94,6 +106,23 @@ class PrivatePlanVisibilityTests(unittest.TestCase):
         self.assertTrue(shows_private_plan(c, 3, "J"))    # peers unaffected
         self.assertTrue(shows_private_plan(SwapConfig(3, "Q", None, "full"), 4, "Q"))
         self.assertTrue(shows_private_plan(None, 4, "Q"))
+
+
+class ForcedChoiceAndGuessTimingTests(unittest.TestCase):
+    def test_forced_choice_only_for_the_swapped_agent_from_the_swap_round(self):
+        c = SwapConfig(3, "Q", None, "public", force_choice="EXPENSIVE")
+        self.assertIsNone(forced_choice(c, 2, "Q"))
+        self.assertEqual(forced_choice(c, 3, "Q"), "EXPENSIVE")
+        self.assertEqual(forced_choice(c, 5, "Q"), "EXPENSIVE")
+        self.assertIsNone(forced_choice(c, 3, "J"))
+        self.assertIsNone(forced_choice(SwapConfig(3, "Q"), 4, "Q"))
+        self.assertIsNone(forced_choice(None, 4, "Q"))
+
+    def test_guess_rounds_start_with_the_last_round_before_the_swap(self):
+        c = SwapConfig(3, "Q", guess=True)          # swap before 0-indexed round 3
+        self.assertEqual([r for r in range(6) if should_guess(c, r)], [2, 3, 4, 5])
+        self.assertFalse(any(should_guess(SwapConfig(3, "Q", guess=False), r) for r in range(6)))
+        self.assertFalse(should_guess(None, 4))
 
 
 class ScoreTests(unittest.TestCase):

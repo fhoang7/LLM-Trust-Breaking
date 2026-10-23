@@ -34,7 +34,7 @@ class FakeQueued:
             self.requests[cid] = r
             parts = cid.split("_")
             if cid.startswith("guess_"):
-                draw = int(parts[3][1:])
+                draw = int(parts[4][1:])
                 out[cid] = {"guess": "changed" if draw % 2 == 0 else "same", "confidence": 4, "reasoning": "x"}
             elif "_s1_" in cid:
                 out[cid] = {"intended_action": PLANS[parts[-1]], "reasoning": "secret"}
@@ -125,27 +125,36 @@ class InheritanceTests(unittest.TestCase):
 
 
 class GuessStageTests(unittest.TestCase):
-    def test_requests_cover_each_peer_and_draw_but_not_the_swapped_agent(self):
+    def test_requests_cover_each_guess_round_peer_and_draw_but_not_the_swapped_agent(self):
         _, fake, _ = run(SwapConfig(2, "Q", OTHER, "public", guess=True, guess_draws=3),
                          n_rounds=3, n_trials=2)
         guess_ids = sorted(c for c in fake.requests if c.startswith("guess_"))
-        self.assertEqual(len(guess_ids), 2 * 2 * 3)
+        # swap_at=2 -> guesses after rounds index 1 (placebo) and 2: 2 rounds x 2 trials x 2 peers x 3 draws
+        self.assertEqual(len(guess_ids), 2 * 2 * 2 * 3)
+        self.assertEqual({c.split("_")[1] for c in guess_ids}, {"r1", "r2"})
         self.assertFalse(any("_Q_" in c for c in guess_ids))
 
     def test_draws_use_distinct_seeds_and_peers_use_their_own_model(self):
         _, fake, _ = run(SwapConfig(2, "Q", OTHER, "public", guess=True, guess_draws=3), n_rounds=3)
-        seeds = {fake.requests[f"guess_t0_J_d{k}"]["seed"] for k in range(3)}
+        seeds = {fake.requests[f"guess_r2_t0_J_d{k}"]["seed"] for k in range(3)}
         self.assertEqual(len(seeds), 3)
-        self.assertEqual(fake.requests["guess_t0_J_d0"]["model"], BASE)
+        self.assertEqual(fake.requests["guess_r2_t0_J_d0"]["model"], BASE)
 
     def test_guess_prompt_contains_the_full_history_including_the_last_round(self):
         _, fake, _ = run(SwapConfig(2, "Q", OTHER, "public", guess=True, guess_draws=1), n_rounds=3)
-        prompt = sys_prompt(fake, "guess_t0_J_d0")
+        prompt = sys_prompt(fake, "guess_r2_t0_J_d0")
         self.assertIn("Round 3:", prompt)
         self.assertIn("Q promises CHEAP in r2", prompt)
 
-    def test_results_stored_on_the_last_round_trials(self):
+    def test_placebo_guess_uses_only_the_history_up_to_that_round(self):
+        _, fake, _ = run(SwapConfig(2, "Q", OTHER, "public", guess=True, guess_draws=1), n_rounds=3)
+        prompt = sys_prompt(fake, "guess_r1_t0_J_d0")
+        self.assertIn("Round 2:", prompt)
+        self.assertNotIn("Round 3:", prompt)
+
+    def test_results_stored_on_each_guess_round(self):
         rounds, _, _ = run(SwapConfig(2, "Q", OTHER, "public", guess=True, guess_draws=3), n_rounds=3)
+        self.assertIn("swap_guess", rounds[1]["trials"][0])      # placebo round
         g = rounds[-1]["trials"][0]["swap_guess"]
         self.assertEqual(g["target"], "Q")
         self.assertEqual(sorted(g["by_peer"]), ["J", "M"])
@@ -157,6 +166,52 @@ class GuessStageTests(unittest.TestCase):
     def test_no_guess_requests_without_the_flag(self):
         _, fake, _ = run(SwapConfig(2, "Q", OTHER, "public", guess=False), n_rounds=3)
         self.assertFalse(any(c.startswith("guess_") for c in fake.requests))
+
+
+class ForcedChoiceTests(unittest.TestCase):
+    def test_choice_is_overridden_from_the_swap_round_and_the_model_choice_is_logged(self):
+        rounds, _, _ = run(SwapConfig(2, "Q", OTHER, "public", force_choice="EXPENSIVE"))
+        choices = [r["trials"][0]["agents"]["Q"]["stage3"]["choice"] for r in rounds]
+        self.assertEqual(choices, ["CHEAP", "CHEAP", "EXPENSIVE", "EXPENSIVE"])
+        late = rounds[2]["trials"][0]["agents"]["Q"]["stage3"]
+        self.assertTrue(late["forced"])
+        self.assertEqual(late["model_choice"], "CHEAP")
+        self.assertNotIn("forced", rounds[1]["trials"][0]["agents"]["Q"]["stage3"])
+
+    def test_peers_are_never_overridden(self):
+        rounds, _, _ = run(SwapConfig(2, "Q", OTHER, "public", force_choice="EXPENSIVE"))
+        for r in rounds:
+            for peer in ("J", "M"):
+                self.assertEqual(r["trials"][0]["agents"][peer]["stage3"]["choice"], "CHEAP")
+                self.assertNotIn("forced", r["trials"][0]["agents"][peer]["stage3"])
+
+    def test_outcomes_and_later_history_use_the_forced_choice(self):
+        rounds, fake, _ = run(SwapConfig(2, "Q", OTHER, "public", force_choice="EXPENSIVE"))
+        self.assertEqual(rounds[2]["trials"][0]["outcomes"]["choices"]["Q"], "EXPENSIVE")
+        self.assertIn("Agent Q chose EXPENSIVE", sys_prompt(fake, "r3_t0_s1_J"))
+
+    def test_forced_cheap_overrides_a_defecting_model(self):
+        class Defector(FakeQueued):
+            def execute_all(self, reqs):
+                out = super().execute_all(reqs)
+                for cid in out:
+                    if "_s3_Q" in cid:
+                        out[cid] = {"choice": "EXPENSIVE", "reasoning": "r"}
+                return out
+        fake = Defector()
+        with contextlib.redirect_stdout(io.StringIO()):
+            rounds = run_all_trials_queued(
+                game_type="diners", agent_names=NAMES, game_params=PARAMS, llm_client=FakeClient(),
+                queued_openrouter_client=fake, n_trials=1, n_rounds=4, round_robin=True,
+                show_progress=False, agent_models={n: BASE for n in NAMES}, use_history=True,
+                swap=SwapConfig(2, "Q", OTHER, "public", force_choice="CHEAP"))
+        q = [r["trials"][0]["agents"]["Q"]["stage3"]["choice"] for r in rounds]
+        self.assertEqual(q, ["EXPENSIVE", "EXPENSIVE", "CHEAP", "CHEAP"])
+        self.assertEqual(rounds[3]["trials"][0]["agents"]["Q"]["stage3"]["model_choice"], "EXPENSIVE")
+
+    def test_no_override_without_the_option(self):
+        rounds, _, _ = run(SwapConfig(2, "Q", OTHER, "public"))
+        self.assertNotIn("forced", rounds[3]["trials"][0]["agents"]["Q"]["stage3"])
 
 
 class DefaultsTests(unittest.TestCase):

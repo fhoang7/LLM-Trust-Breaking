@@ -37,8 +37,8 @@ from src.endogenous.core.prompt_builders import (
 )
 from src.endogenous.core.history import build_history_block, make_round_record
 from src.endogenous.core.swap import (
-    SwapConfig, apply_swap, build_swap_guess_prompt, changed_score,
-    shows_private_plan, summarize_guesses,
+    SwapConfig, apply_swap, build_swap_guess_prompt, changed_score, forced_choice,
+    shows_private_plan, should_guess, summarize_guesses,
 )
 
 
@@ -1140,15 +1140,16 @@ def _run_swap_guess_stage(
     agent_models: Dict[str, str],
     history: Dict[int, List[Dict[str, Any]]],
     trial_ids: List[int],
-    last_round_trials: List[Dict[str, Any]],
+    round_idx: int,
+    round_trials: List[Dict[str, Any]],
     queued_openai_client: Any,
     queued_openrouter_client: Any,
 ) -> None:
-    """Ask every peer, `swap.guess_draws` times, whether the swapped agent changed.
+    """After round `round_idx`, ask every peer, `swap.guess_draws` times, whether the swapped agent changed.
 
-    Separate requests that are never fed back to the agents. Draws use distinct seeds
-    (1000 + draw index) so they are independent samples. Results are written to
-    trial["swap_guess"] on the last round's trial dicts.
+    Separate requests that are never fed back to the agents, built from the history up to and
+    including this round. Draws use distinct seeds (1000 + draw index) so they are independent
+    samples. Results are written to trial["swap_guess"] on this round's trial dicts.
     """
     peers = [a for a in agent_names if a != swap.agent]
     requests, meta = [], []
@@ -1160,14 +1161,14 @@ def _run_swap_guess_stage(
             sys_p, usr_p, schema = build_swap_guess_prompt(
                 game_type, peer, swap.agent, agent_names, game_params, block, supports)
             for k in range(swap.guess_draws):
-                cid = f"guess_t{tid}_{peer}_d{k}"
+                cid = f"guess_r{round_idx}_t{tid}_{peer}_d{k}"
                 requests.append(_build_request(
                     custom_id=cid, model=model, system_prompt=sys_p, user_prompt=usr_p,
                     json_schema=schema, temperature=llm_client.temperature,
                     supports_structured=supports, llm_client=llm_client, seed=1000 + k))
                 meta.append((tid, peer, cid))
 
-    print(f"\n  Swap guess: {len(requests)} requests "
+    print(f"\n  Swap guess (after round {round_idx + 1}): {len(requests)} requests "
           f"({len(trial_ids)} trials x {len(peers)} peers x {swap.guess_draws} draws)")
     raw = _execute_requests_split_by_provider(
         requests, queued_openai_client, queued_openrouter_client, "Swap guess")
@@ -1185,7 +1186,7 @@ def _run_swap_guess_stage(
             "_parse_ok": score is not None,
         })
 
-    by_id = {t["trial_id"]: t for t in last_round_trials}
+    by_id = {t["trial_id"]: t for t in round_trials}
     for tid in trial_ids:
         by_id[tid]["swap_guess"] = summarize_guesses(swap.agent, draws[tid])
 
@@ -1514,6 +1515,10 @@ def run_all_trials_queued(
                     "reasoning": parsed.get("reasoning", ""),
                     "_parse_ok": action is not None,
                 }
+                forced = forced_choice(swap, round_idx, agent_name)
+                if forced is not None:
+                    stage3_parsed[f"{trial_id}_{agent_name}"].update(
+                        {"choice": forced, "_parse_ok": True, "forced": True, "model_choice": action})
 
         # ---- Judge batch (LLM-as-judge, same model/client as agents) ----
         print(f"  Judge: {n_trials * n_agents} classification requests...")
@@ -1572,6 +1577,10 @@ def run_all_trials_queued(
                     t["agents"][agent_name]["model_used"] = agent_models[agent_name]
                 if swap_event is not None and round_idx == swap.swap_at:
                     t["swap_event"] = swap_event
+                s3 = stage3_parsed[f"{t['trial_id']}_{swap.agent}"]
+                if s3.get("forced"):
+                    t["agents"][swap.agent]["stage3"]["forced"] = True
+                    t["agents"][swap.agent]["stage3"]["model_choice"] = s3["model_choice"]
 
         if use_history:
             for t in round_results:
@@ -1679,14 +1688,14 @@ def run_all_trials_queued(
                         if other in current_takeaways[trial_id][agent_name]:
                             current_takeaways[trial_id][agent_name][other] = val
 
+        if should_guess(swap, round_idx):
+            _run_swap_guess_stage(
+                swap, game_type, agent_names, game_params, llm_client, agent_models, history,
+                trial_ids, round_idx, round_results, queued_openai_client, queued_openrouter_client)
+
         t_round = time.time() - t_round_start
         print(f"  Round {round_idx + 1} done in {t_round:.1f}s")
         all_rounds.append({"round_id": round_idx, "trials": round_results})
-
-    if swap is not None and swap.guess:
-        _run_swap_guess_stage(
-            swap, game_type, agent_names, game_params, llm_client, agent_models, history,
-            trial_ids, all_rounds[-1]["trials"], queued_openai_client, queued_openrouter_client)
 
     elapsed = time.time() - start_time
     total_errors = sum(t["_parse_errors"] for r in all_rounds for t in r["trials"])

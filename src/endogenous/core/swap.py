@@ -16,17 +16,18 @@ class SwapConfig:
     model: Optional[str] = None   # None = same model (sham or fresh instance)
     inherit: str = "public"       # "public": public history only; "full": plans and trust notes carry over
     guess: bool = False           # ask the peers a same/changed question after the last round
-    guess_draws: int = 5          # independent draws per peer
+    guess_draws: int = 3          # independent draws per peer per round
+    force_choice: Optional[str] = None  # diners only: override the swapped agent's final choice from the swap round on
 
 
 def build_swap_config(
-    *, swap_at, agent, model, inherit, guess, guess_draws,
+    *, swap_at, agent, model, inherit, guess, guess_draws, force_choice=None, game_type="diners",
     agent_names: List[str], n_rounds: int, use_queue: bool, use_history: bool,
 ) -> Optional[SwapConfig]:
     """Validate the --swap-* options; returns None when no swap was requested."""
     if swap_at is None:
-        if agent or model or guess:
-            raise ValueError("--swap-agent/--swap-model/--swap-guess need --swap-at")
+        if agent or model or guess or force_choice:
+            raise ValueError("--swap-agent/--swap-model/--swap-guess/--swap-force-choice need --swap-at")
         return None
     if not use_queue:
         raise ValueError("--swap-at requires --use-queue")
@@ -43,8 +44,15 @@ def build_swap_config(
         raise ValueError(f"--swap-inherit must be one of {', '.join(INHERIT_CHOICES)} (got {inherit!r})")
     if guess_draws < 1:
         raise ValueError("--swap-guess-draws must be at least 1")
+    forced = None
+    if force_choice:
+        if game_type != "diners":
+            raise ValueError("--swap-force-choice is only supported for the diners game")
+        forced = str(force_choice).strip().upper()
+        if forced not in ("CHEAP", "EXPENSIVE"):
+            raise ValueError(f"--swap-force-choice must be CHEAP or EXPENSIVE (got {force_choice!r})")
     return SwapConfig(swap_at=swap_at, agent=agent, model=model or None, inherit=inherit,
-                      guess=bool(guess), guess_draws=guess_draws)
+                      guess=bool(guess), guess_draws=guess_draws, force_choice=forced)
 
 
 def apply_swap(
@@ -74,6 +82,22 @@ def shows_private_plan(cfg: Optional[SwapConfig], round_idx: int, agent: str) ->
     if cfg is None:
         return True
     return not (cfg.inherit == "public" and agent == cfg.agent and round_idx >= cfg.swap_at)
+
+
+def forced_choice(cfg: Optional[SwapConfig], round_idx: int, agent: str) -> Optional[str]:
+    """The overridden final choice for this agent in this round, or None if it plays freely."""
+    if cfg is None or not cfg.force_choice:
+        return None
+    return cfg.force_choice if agent == cfg.agent and round_idx >= cfg.swap_at else None
+
+
+def should_guess(cfg: Optional[SwapConfig], round_idx: int) -> bool:
+    """Ask the peers after every round from the last round before the swap onward.
+
+    The first of these rounds (0-indexed swap_at - 1) is a within-game placebo: no swap has
+    happened yet, so every arm should answer "same".
+    """
+    return bool(cfg and cfg.guess and round_idx >= cfg.swap_at - 1)
 
 
 def changed_score(guess: Any, confidence: Any) -> Optional[int]:
