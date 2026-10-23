@@ -137,5 +137,37 @@ Caveats:
 - Log parse-failure counts per agent-stage and per model before interpreting any swap effect, or parse failures can look like behaviour change.
 - Game rules (`src/games/diners.py`): joy EXPENSIVE 10 / CHEAP 5, cost EXPENSIVE 8 / CHEAP 2, payoff = joy - total bill / N. For 2 agents: (C,C)=3,3; (C,E)=0,5; (E,E)=2,2, so EXPENSIVE dominates but mutual CHEAP beats mutual EXPENSIVE.
 
+## Swap hook (branch `feature/swap-hook`)
+
+Design: `docs/superpowers/specs/2026-10-23-swap-hook-design.md`. Plan: `docs/superpowers/plans/2026-10-23-swap-hook.md`. Code: `src/endogenous/core/swap.py`, `trial_runner.run_all_trials_queued(swap=...)`, `src/endogenous/analysis/swap_stats.py`, `experiments/analysis/swap_analysis.py`. 74 offline tests pass (`python -m unittest discover -s tests -t .`).
+
+What it does: after round `--swap-at` (1-indexed) one agent (`--swap-agent`, must be one of the printed agent names, which are random letters per run) gets a new backend (`--swap-model`, omit to keep the same model). Name and displayed identity are unchanged, peers are never told. `--swap-inherit public` (default): the replacement sees the public history only (announcements, choices, payoffs), its own earlier private plans are hidden and its own trust notes are cleared; peers' notes about it persist. `--swap-inherit full`: nothing is hidden. Requires `--use-queue` and `--history`. `--swap-guess` asks each peer, after the last round, 5 independent times (`--swap-guess-draws`), whether the swapped agent is "same" or "changed" with a 1-5 confidence and a one-sentence reason (never fed back to the agents). Each draw is mapped to `changed_score` 1-10 (10 = certain it changed).
+
+Arm to flags (3 agents, 6 rounds, swap after round 3; give every arm its own `--run-suffix`):
+
+| Arm | Flags |
+|---|---|
+| a. no-op sham | `--swap-at 3 --swap-agent Q --swap-inherit full --swap-guess` |
+| b. fresh Haiku | `--swap-at 3 --swap-agent Q --swap-inherit public --swap-guess` |
+| c. Sonnet | add `--swap-model <sonnet id>` to b |
+| d. DeepSeek | add `--swap-model deepseek/deepseek-v4-flash` to b |
+| follow-up: blend-in | d with `--swap-inherit full` |
+
+Analysis: `python experiments/analysis/swap_analysis.py --arm a=<json> --arm b=<json> ...` gives per-arm means with 95% BCa bootstrap CIs (trial = unit) and the contrasts b-a, c-b, d-b with permutation p-values.
+
+Saved JSON additions (only with a swap): `metadata.swap`, `agents[x].model_used` per round, `swap_event` on the first post-swap round, `swap_guess` on the last round's trials.
+
+### Pilot: one game each of arms a and b (Haiku 4.5, 3 agents, 6 rounds)
+
+- **Works.** Swap fired before round 4, `model_used` logged, 0 parse errors, 0 failed requests. In arm b the replacement's `history_seen` has no "Your private plan" lines (peers' do), and its round-4 message refers to the earlier rounds (so it did get the public history).
+- **Cost and time.** The two games cost $0.61 together ($1.29 - $0.68 on the key's usage counter), about **$0.30 per game, above the $0.20 estimate**. Each game took 4-5 minutes. A game is about 100 requests and the new-account limit is 20 requests per minute per model, so **10 trials of one Haiku arm is roughly 50 minutes and about $3** (arms c and d add little because only Q's calls change model).
+- **Guess draws.** The 5 draws per peer differ in wording but every peer gave the **same answer and the same confidence on all 5** (arm a: J "same" 5 x5, M "same" 4 x5; arm b: "same" 5 for both peers). So resampling mostly removes wording noise, not decision noise: the variance is between games, so more trials, not more draws, buys power. The draws are not literally identical, so the seed handling is working.
+- **Both arms: peers say "same".** `changed_score` 1.5 (a) and 1.0 (b). That is the expected false-positive baseline (no detection of a same-model replacement), and with n=1 per arm there is no CI (the analysis script prints n/a).
+- **Why they say "same".** The peers' reasons cite consistency of style and behaviour ("identical phrasing... across all six rounds"), i.e. the agents' imitation of each other under `--history` is read as evidence that Q is unchanged. Q also repeats itself nearly verbatim from round to round. This is the style-convergence risk from the spec showing up in the data; it may make style a weak cue in arms c and d too.
+- **Floor and saturation.** All choices are CHEAP in every round, every trust score is 5, and no suspicion keywords ("different", "changed", "replaced", "inconsistent", "substitut") appear in any assessment of Q in either game. Cooperation rate, announce-vs-choose gap and trust deltas will be flat for a Haiku-for-Haiku swap, so arms a and b can only separate on the guess score.
+- **Interval coverage at n=10.** A simulation with skewed data (exponential, n=10) gave a nominal 95% BCa interval a true coverage of about 87% (plain percentile about 86%). Read the CIs as somewhat too narrow at this sample size; the permutation p-values and the size of the effect matter as much.
+
+Not built yet: the suspicion-language coder (waiting for the hand-read of the pilot transcripts, which show no suspicion language at all so far; arms c and d are likelier to produce some), and forking (deferred in the spec).
+
 ## Security note
 My `diff .env .env.example` printed the OpenRouter key into the session transcript. It was never written to a file or committed (`.env` is gitignored). Consider rotating that key.
