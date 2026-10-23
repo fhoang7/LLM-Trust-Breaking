@@ -2,6 +2,7 @@
 from __future__ import annotations
 from typing import List, Dict, Any, Optional, Callable
 import asyncio
+from collections import Counter
 import aiohttp
 import json
 import time
@@ -52,6 +53,31 @@ class QueuedOpenRouterClient:
         self.max_workers = max_workers
         self.timeout = timeout
         self.max_retries = max_retries
+
+    RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+    RETRY_BASE_SECONDS = 2.0     # first backoff; doubles each attempt
+    RETRY_MAX_SECONDS = 65.0     # cap on any single wait (per-minute rate-limit windows)
+    TRUNCATION_RETRY_FACTOR = 3  # max_tokens multiplier when a reply is empty with finish_reason=length
+
+    def _backoff_seconds(self, attempt: int, error: Optional[Exception] = None) -> float:
+        """Wait before retry `attempt` (0-based), honouring a Retry-After header if sent."""
+        headers = getattr(error, "headers", None) or {}
+        retry_after = headers.get("Retry-After")
+        if retry_after:
+            try:
+                return min(float(retry_after), self.RETRY_MAX_SECONDS)
+            except ValueError:
+                pass
+        reset_ms = headers.get("X-RateLimit-Reset")  # OpenRouter: epoch milliseconds
+        if reset_ms:
+            try:
+                until_reset = float(reset_ms) / 1000 - time.time()
+                if until_reset > 0:
+                    return min(until_reset, self.RETRY_MAX_SECONDS) + (time.time() % 1)
+            except ValueError:
+                pass
+        wait =self.RETRY_BASE_SECONDS * (2 ** attempt)
+        return min(wait, self.RETRY_MAX_SECONDS) + (time.time() % 1)
 
     def execute_all(
         self,
@@ -171,7 +197,20 @@ class QueuedOpenRouterClient:
             # Wait for all workers to finish
             await asyncio.gather(*workers)
 
+        self._print_failure_summary(results, total_requests)
         return results
+
+    @staticmethod
+    def _print_failure_summary(results: Dict[str, Any], total_requests: int) -> None:
+        """Print how many requests failed and why, so failures are not silent downstream."""
+        reasons = Counter(
+            r["error"][:70] for r in results.values()
+            if isinstance(r, dict) and r.get("status") == "error"
+        )
+        if reasons:
+            print(f"  WARNING: {sum(reasons.values())}/{total_requests} requests failed:")
+            for reason, n in reasons.most_common():
+                print(f"    {n} x {reason}")
 
     async def _execute_single_async(
         self,
@@ -189,6 +228,9 @@ class QueuedOpenRouterClient:
             Tuple of (custom_id, response)
         """
         custom_id = request['custom_id']
+
+        max_tokens = request.get('max_tokens') or request.get('max_completion_tokens') or 100
+        truncation_retried = False
 
         # Retry with exponential backoff
         for attempt in range(self.max_retries):
@@ -208,12 +250,7 @@ class QueuedOpenRouterClient:
                 if 'temperature' in request:
                     data['temperature'] = request['temperature']
 
-                if 'max_tokens' in request:
-                    data['max_tokens'] = request['max_tokens']
-                elif 'max_completion_tokens' in request:
-                    data['max_tokens'] = request['max_completion_tokens']
-                else:
-                    data['max_tokens'] = 100
+                data['max_tokens'] = max_tokens
 
                 # Add reasoning_effort for reasoning models (o1, o3, gpt-5)
                 if 'reasoning_effort' in request:
@@ -228,7 +265,33 @@ class QueuedOpenRouterClient:
                 async with session.post(self.base_url, headers=headers, json=data) as response:
                     response.raise_for_status()
                     response_data = await response.json()
-                    content = response_data["choices"][0]["message"]["content"]
+
+                    if not response_data.get("choices"):
+                        # HTTP 200 carrying an error body (upstream provider failure)
+                        message = (response_data.get("error") or {}).get("message", response_data)
+                        if attempt < self.max_retries - 1:
+                            await asyncio.sleep(self._backoff_seconds(attempt))
+                            continue
+                        return custom_id, {
+                            "status": "error",
+                            "error": f"No choices in response: {message}"
+                        }
+
+                    choice = response_data["choices"][0]
+                    content = choice["message"].get("content")
+
+                    if not content:
+                        # Reasoning models can spend the whole token budget on hidden
+                        # reasoning and return content=null with finish_reason="length".
+                        finish = choice.get("finish_reason")
+                        if finish == "length" and not truncation_retried:
+                            truncation_retried = True
+                            max_tokens = max_tokens * self.TRUNCATION_RETRY_FACTOR
+                            continue
+                        return custom_id, {
+                            "status": "error",
+                            "error": f"empty content (finish_reason={finish}, max_tokens={max_tokens})"
+                        }
 
                     # Try to parse JSON content
                     try:
@@ -244,26 +307,25 @@ class QueuedOpenRouterClient:
                             "content": content
                         }
 
+            except aiohttp.ClientResponseError as e:
+                # HTTP errors. This must precede the ClientError clause below, which
+                # would otherwise catch (and blindly retry) every HTTP status.
+                if e.status in self.RETRYABLE_STATUSES and attempt < self.max_retries - 1:
+                    await asyncio.sleep(self._backoff_seconds(attempt, e))
+                else:
+                    return custom_id, {
+                        "status": "error",
+                        "error": f"HTTP {e.status} after {attempt + 1} attempt(s): {e.message}"
+                    }
+
             except (asyncio.TimeoutError, aiohttp.ClientError) as e:
                 # Retryable errors
                 if attempt < self.max_retries - 1:
-                    wait_time = (2 ** attempt) + (time.time() % 1)
-                    await asyncio.sleep(wait_time)
+                    await asyncio.sleep(self._backoff_seconds(attempt))
                 else:
                     return custom_id, {
                         "status": "error",
                         "error": f"Max retries exceeded: {str(e)}"
-                    }
-
-            except aiohttp.ClientResponseError as e:
-                # HTTP errors (rate limiting, server errors)
-                if e.status in [429, 500, 502, 503, 504] and attempt < self.max_retries - 1:
-                    wait_time = (2 ** attempt) + (time.time() % 1)
-                    await asyncio.sleep(wait_time)
-                else:
-                    return custom_id, {
-                        "status": "error",
-                        "error": str(e)
                     }
 
             except Exception as e:
