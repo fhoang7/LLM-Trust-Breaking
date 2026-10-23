@@ -32,6 +32,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.config import settings
 from src.llm.client_factory import create_llm_clients
+from dataclasses import asdict
+
+from src.endogenous.core.swap import build_swap_config
 from src.endogenous.core.trial_runner import run_all_trials, run_all_trials_queued
 from src.endogenous.analysis.endogenous_analyzer import (
     analyze_all_rounds, save_results, print_summary
@@ -163,6 +166,21 @@ def main():
         )
     )
 
+    # Mid-run swap
+    parser.add_argument("--swap-at", type=int, default=None,
+                        help="Replace one agent after this round (1-indexed). Requires --use-queue and --history.")
+    parser.add_argument("--swap-agent", type=str, default=None,
+                        help="Name of the agent whose backend is replaced (one of the printed agent names).")
+    parser.add_argument("--swap-model", type=str, default=None,
+                        help="Model for the replacement. Omit to keep the same model (sham or fresh instance).")
+    parser.add_argument("--swap-inherit", choices=["public", "full"], default="public",
+                        help=("public (default): the replacement sees public history only and has no trust notes. "
+                              "full: its private plans and trust notes carry over."))
+    parser.add_argument("--swap-guess", action="store_true",
+                        help="After the last round, ask each peer whether the swapped agent is the same or changed.")
+    parser.add_argument("--swap-guess-draws", type=int, default=5,
+                        help="Independent guess draws per peer (default: 5).")
+
     # Stage 3 ablation
     parser.add_argument(
         "--no-self-reference", action="store_true",
@@ -227,6 +245,16 @@ def main():
     agent_names = sorted(alphabet[: args.agents])
     print(f"Agent names: {agent_names}")
 
+    try:
+        swap = build_swap_config(
+            swap_at=args.swap_at, agent=args.swap_agent, model=args.swap_model,
+            inherit=args.swap_inherit, guess=args.swap_guess, guess_draws=args.swap_guess_draws,
+            agent_names=agent_names, n_rounds=args.rounds,
+            use_queue=args.use_queue, use_history=args.history,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+
     # Build agent_models dict with fallback to default model
     agent_models = {}
     if agent_models_raw:
@@ -273,8 +301,9 @@ def main():
         from src.llm.client_factory import is_openai_model
 
         # Determine which providers we need based on agent models
-        has_openai = any(is_openai_model(m) for m in agent_models.values())
-        has_openrouter = any(not is_openai_model(m) for m in agent_models.values())
+        models_in_use = list(agent_models.values()) + ([swap.model] if swap and swap.model else [])
+        has_openai = any(is_openai_model(m) for m in models_in_use)
+        has_openrouter = any(not is_openai_model(m) for m in models_in_use)
 
         # Create queued clients for needed providers
         queued_openai_client = None
@@ -313,6 +342,7 @@ def main():
             show_progress=True,
             agent_models=agent_models,
             use_history=args.history,
+            swap=swap,
         )
     else:
         rounds = run_all_trials(
@@ -342,6 +372,7 @@ def main():
     )
 
     analysis["metadata"]["history"] = args.history
+    analysis["metadata"]["swap"] = asdict(swap) if swap else None
 
     print_summary(analysis)
 
