@@ -190,6 +190,7 @@ def build_stage1_prompt(
     game_params: Dict[str, Any],
     supports_structured: bool = True,
     takeaways: Optional[Dict[str, str]] = None,
+    history_block: str = "",
 ) -> Tuple[str, str, Dict[str, Any]]:
     """
     Build Stage 1 (private planning) prompt.
@@ -232,6 +233,7 @@ def build_stage1_prompt(
         f"You are Agent {agent_name} in a strategic game with {n_agents - 1} other agents.\n\n"
         f"{game_rules}\n\n"
         f"{takeaway_block}"
+        f"{history_block}"
         "GAME PROTOCOL:\n"
         "  1. Private Planning (now): You privately decide your intended action and strategy.\n"
         "  2. Public Discussion: All agents publicly announce their intended actions and reasoning.\n"
@@ -293,6 +295,7 @@ def build_stage2_prompt(
     game_params: Dict[str, Any],
     supports_structured: bool = True,
     prior_announcements: Optional[List[Dict[str, Any]]] = None,
+    history_block: str = "",
 ) -> Tuple[str, str, Dict[str, Any]]:
     """
     Build Stage 2 (public announcement) prompt.
@@ -331,6 +334,7 @@ def build_stage2_prompt(
     system_prompt = (
         f"You are Agent {agent_name} in a strategic game with {n_agents - 1} other agents.\n\n"
         f"{game_rules}\n\n"
+        f"{history_block}"
         "You must make a strategic decision to maximize your outcome."
     )
 
@@ -409,7 +413,8 @@ def build_stage3_prompt(
     stage1_result: Optional[Dict[str, Any]] = None,
     stage2_self: Optional[Dict[str, Any]] = None,
     self_reference: bool = True,
-    supports_structured: bool = True
+    supports_structured: bool = True,
+    history_block: str = "",
 ) -> Tuple[str, str, Dict[str, Any]]:
     """
     Build Stage 3 (action selection) prompt.
@@ -438,6 +443,7 @@ def build_stage3_prompt(
     system_prompt = (
         f"You are Agent {agent_name} in a strategic game with {n_agents - 1} other agents.\n\n"
         f"{game_rules}\n\n"
+        f"{history_block}"
         "You must make a strategic decision to maximize your outcome."
     )
 
@@ -561,6 +567,7 @@ def build_single_agent_reflection_prompt(
     current_takeaways: Dict[str, Dict[str, Any]],
     round_idx: int,
     supports_structured: bool = True,
+    history_block: str = "",
 ) -> Tuple[str, str, Dict[str, Any]]:
     """
     Build a reflection prompt for one focal agent evaluating ONE target agent.
@@ -623,6 +630,7 @@ def build_single_agent_reflection_prompt(
     system_prompt = (
         f"You are Agent {agent_name} in a strategic game with {len(agent_names) - 1} other agents.\n\n"
         f"{game_rules}\n\n"
+        f"{history_block}"
         "You must make strategic decisions to maximize your outcome."
     )
 
