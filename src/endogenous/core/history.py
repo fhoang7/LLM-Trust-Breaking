@@ -39,14 +39,21 @@ def _payoff(value: Any) -> str:
     return f"{value:.1f}" if isinstance(value, (int, float)) else "n/a"
 
 
-def build_history_block(agent_name: str, rounds: List[Dict[str, Any]]) -> str:
-    """Render the history one agent may see; "" when there are no earlier rounds."""
+def build_history_block(
+    agent_name: str, rounds: List[Dict[str, Any]], show_private_plan: bool = True
+) -> str:
+    """Render the history one agent may see; "" when there are no earlier rounds.
+
+    show_private_plan=False omits the viewer's own plan lines (used for a swapped-in
+    replacement that inherits public information only).
+    """
     if not rounds:
         return ""
     lines = ["HISTORY OF PREVIOUS ROUNDS (what you have observed so far):"]
     for rec in rounds:
         lines.append(f"Round {rec['round_id'] + 1}:")
-        lines.append(f"  Your private plan: {_choice(rec['plans'].get(agent_name))}")
+        if show_private_plan:
+            lines.append(f"  Your private plan: {_choice(rec['plans'].get(agent_name))}")
         for name, ann in rec["announcements"].items():
             who = f"Agent {name} (you)" if name == agent_name else f"Agent {name}"
             lines.append(f'  {who} announced {_choice(ann["stated_action"])}: "{ann["message"]}"')

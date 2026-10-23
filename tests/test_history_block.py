@@ -55,6 +55,16 @@ class HistoryBlockTests(unittest.TestCase):
         self.assertIn("Your private plan: unknown", block)
         self.assertIn("Agent M chose unknown and earned n/a", block)
 
+    def test_private_plan_can_be_hidden(self):
+        block = build_history_block("Q", [record()], show_private_plan=False)
+        self.assertNotIn("Your private plan", block)
+        self.assertNotIn("EXPENSIVE", block)
+        self.assertIn('Agent Q (you) announced CHEAP: "Q: agreed, CHEAP"', block)
+        self.assertIn("Agent M chose CHEAP and earned 3.0", block)
+
+    def test_private_plan_shown_by_default(self):
+        self.assertIn("Your private plan: EXPENSIVE", build_history_block("Q", [record()]))
+
 
 if __name__ == "__main__":
     unittest.main()
