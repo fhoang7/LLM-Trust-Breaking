@@ -30,9 +30,18 @@ def _delta(post: Optional[float], pre: Optional[float]) -> Optional[float]:
     return None if post is None or pre is None else post - pre
 
 
+DETECTED_ABOVE = 5.5   # a trial score above this means the peers lean "changed"
+
+
 def trial_metrics(rounds: List[Dict[str, Any]], swap_agent: str, swap_at: int,
-                  cooperative: str = "CHEAP") -> List[Dict[str, Optional[float]]]:
-    """One dict per trial: guess_score, trust_delta, coop_delta, gap_delta.
+                  cooperative: str = "CHEAP") -> List[Dict[str, Any]]:
+    """One dict per trial.
+
+    guess_score: the last round's guess score (primary). guess_curve: {1-indexed round: score}
+    for every round that has a guess. placebo_score: the score after the last round before
+    the swap (round number swap_at, nothing has changed yet). time_to_detection: the first
+    post-swap round with a score above DETECTED_ABOVE, counted from the swap (1 = the first
+    post-swap round), else None. trust_delta, coop_delta, gap_delta: post minus pre.
 
     "pre" = rounds with index < swap_at, "post" = index >= swap_at. Incumbents are the
     agents other than swap_agent.
@@ -58,9 +67,21 @@ def trial_metrics(rounds: List[Dict[str, Any]], swap_agent: str, swap_at: int,
                     coop[side].append(choice == cooperative)
                 if choice is not None and stated is not None:
                     gap[side].append(choice != stated)
-        guess = rounds[-1]["trials"][tid].get("swap_guess") or {}
+        curve = {}
+        for r, rnd in enumerate(rounds):
+            score = (rnd["trials"][tid].get("swap_guess") or {}).get("trial_changed_score")
+            if score is not None:
+                curve[r + 1] = score
+        time_to_detection = None
+        for r in range(swap_at, len(rounds)):
+            if curve.get(r + 1, 0) > DETECTED_ABOVE:
+                time_to_detection = r - swap_at + 1
+                break
         out.append({
-            "guess_score": guess.get("trial_changed_score"),
+            "guess_score": curve.get(len(rounds)),
+            "guess_curve": curve,
+            "placebo_score": curve.get(swap_at),
+            "time_to_detection": time_to_detection,
             "trust_delta": _delta(_mean(trust["post"]) if trust["post"] else None,
                                   _mean(trust["pre"]) if trust["pre"] else None),
             "coop_delta": _delta(_rate(coop["post"]), _rate(coop["pre"])),
@@ -147,3 +168,54 @@ def permutation_pvalue(a: Sequence[Optional[float]], b: Sequence[Optional[float]
         if abs(_mean(pooled[:na]) - _mean(pooled[na:])) >= observed - 1e-12:
             hits += 1
     return (hits + 1) / (n_perm + 1)
+
+
+# ---------------------------------------------------------------------------
+# Detection curve and interaction
+# ---------------------------------------------------------------------------
+
+def detection_share(rows: Sequence[Dict[str, Any]], max_k: int) -> List[Optional[float]]:
+    """Cumulative share of trials detected by post-swap round k, for k = 1..max_k.
+
+    Trials that were never detected within the game count as not detected (equal follow-up
+    for every trial, so no censoring correction is needed).
+    """
+    if not rows:
+        return [None] * max_k
+    return [sum(1 for r in rows if r["time_to_detection"] is not None and r["time_to_detection"] <= k)
+            / len(rows) for k in range(1, max_k + 1)]
+
+
+def curve_summary(rows: Sequence[Dict[str, Any]], rounds: Sequence[int], n_boot: int = 10000,
+                  alpha: float = 0.05, seed: int = 0) -> Dict[int, Optional[Dict[str, Any]]]:
+    """Mean guess score with a bootstrap CI for each 1-indexed round in `rounds`."""
+    return {r: bootstrap_ci([row["guess_curve"].get(r) for row in rows], n_boot=n_boot,
+                            alpha=alpha, seed=seed) for r in rounds}
+
+
+def interaction_ci(e: Sequence[Optional[float]], d: Sequence[Optional[float]],
+                   c: Sequence[Optional[float]], b: Sequence[Optional[float]],
+                   n_boot: int = 10000, alpha: float = 0.05, seed: int = 0) -> Optional[Dict[str, Any]]:
+    """CI for the identity x behaviour interaction (mean(e) - mean(d)) - (mean(c) - mean(b)).
+
+    Zero means the two cues simply add up. Each arm's trials are resampled independently.
+    """
+    groups = [_clean(e), _clean(d), _clean(c), _clean(b)]
+    if any(len(g) < 2 for g in groups):
+        return None
+    rng = random.Random(seed)
+    sizes = [len(g) for g in groups]
+
+    def stat(gs):
+        m = [_mean(g) for g in gs]
+        return (m[0] - m[1]) - (m[2] - m[3])
+
+    boot = [stat([[g[rng.randrange(len(g))] for _ in range(len(g))] for g in groups])
+            for _ in range(n_boot)]
+    theta = stat(groups)
+    jack = []
+    for gi, g in enumerate(groups):
+        for i in range(len(g)):
+            jack.append(stat([g2[:i] + g2[i + 1:] if gj == gi else g2 for gj, g2 in enumerate(groups)]))
+    lo, hi = _bca(boot, theta, jack, alpha)
+    return {"interaction": theta, "lo": lo, "hi": hi, "n": sizes}

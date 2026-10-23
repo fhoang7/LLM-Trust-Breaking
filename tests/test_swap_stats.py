@@ -1,7 +1,8 @@
 import unittest
 
 from src.endogenous.analysis.swap_stats import (
-    bootstrap_ci, diff_ci, permutation_pvalue, trial_metrics,
+    bootstrap_ci, curve_summary, detection_share, diff_ci, interaction_ci,
+    permutation_pvalue, trial_metrics,
 )
 
 
@@ -27,7 +28,9 @@ def fake_rounds():
         q = agent("CHEAP", "CHEAP", {"J": 1, "M": 1})   # Q's own opinions must be ignored
         trial = {"trial_id": 0, "agents": {"J": j, "M": m, "Q": q}}
         rounds.append({"round_id": r, "trials": [trial]})
-    rounds[-1]["trials"][0]["swap_guess"] = {"trial_changed_score": 7.5}
+    # guesses after rounds idx 1 (placebo, the last round before the swap), 2 and 3
+    for idx, score in ((1, 1.5), (2, 4.0), (3, 7.5)):
+        rounds[idx]["trials"][0]["swap_guess"] = {"trial_changed_score": score}
     return rounds
 
 
@@ -41,14 +44,37 @@ class TrialMetricsTests(unittest.TestCase):
         # announce-vs-choose gap pre 0.0; post J differs, M does not -> 0.5
         self.assertAlmostEqual(m["gap_delta"], 0.5 - 0.0)
 
+    def test_guess_curve_placebo_and_time_to_detection(self):
+        m = trial_metrics(fake_rounds(), swap_agent="Q", swap_at=2)[0]
+        self.assertEqual(m["guess_curve"], {2: 1.5, 3: 4.0, 4: 7.5})   # keyed by 1-indexed round
+        self.assertEqual(m["placebo_score"], 1.5)
+        self.assertEqual(m["time_to_detection"], 2)    # first detected in the 2nd post-swap round
+
+    def test_never_detected_gives_none(self):
+        rounds = fake_rounds()
+        rounds[3]["trials"][0]["swap_guess"] = {"trial_changed_score": 5.0}
+        self.assertIsNone(trial_metrics(rounds, "Q", 2)[0]["time_to_detection"])
+
+    def test_detection_in_the_placebo_round_does_not_count(self):
+        rounds = fake_rounds()
+        rounds[1]["trials"][0]["swap_guess"] = {"trial_changed_score": 9.0}
+        rounds[2]["trials"][0]["swap_guess"] = {"trial_changed_score": 3.0}
+        rounds[3]["trials"][0]["swap_guess"] = {"trial_changed_score": 3.0}
+        m = trial_metrics(rounds, "Q", 2)[0]
+        self.assertEqual(m["placebo_score"], 9.0)
+        self.assertIsNone(m["time_to_detection"])
+
     def test_missing_pieces_give_none(self):
         rounds = fake_rounds()
-        del rounds[-1]["trials"][0]["swap_guess"]
+        for r in rounds:
+            r["trials"][0].pop("swap_guess", None)
         for r in rounds:
             for a in r["trials"][0]["agents"].values():
                 a.pop("reflection", None)
         m = trial_metrics(rounds, "Q", 2)[0]
         self.assertIsNone(m["guess_score"])
+        self.assertIsNone(m["time_to_detection"])
+        self.assertEqual(m["guess_curve"], {})
         self.assertIsNone(m["trust_delta"])
         self.assertIsNotNone(m["coop_delta"])
 
@@ -93,6 +119,49 @@ class DiffTests(unittest.TestCase):
 
     def test_too_few_gives_none(self):
         self.assertIsNone(diff_ci([1.0], [1.0, 2.0]))
+
+
+class CurveTests(unittest.TestCase):
+    def test_detection_share_is_cumulative_and_counts_never_detected(self):
+        rows = [{"time_to_detection": t} for t in (1, 2, None, 2)]
+        self.assertEqual(detection_share(rows, max_k=3), [0.25, 0.75, 0.75])
+        self.assertEqual(detection_share([], max_k=2), [None, None])
+
+    def test_curve_summary_gives_a_mean_and_interval_per_round(self):
+        rows = [{"guess_curve": {3: 1.0 + i % 2, 4: 6.0 + i % 3}} for i in range(8)]
+        out = curve_summary(rows, rounds=[3, 4], n_boot=300, seed=1)
+        self.assertEqual(sorted(out), [3, 4])
+        self.assertLess(out[3]["mean"], out[4]["mean"])
+        self.assertLessEqual(out[4]["lo"], out[4]["mean"])
+        self.assertGreaterEqual(out[4]["hi"], out[4]["mean"])
+
+    def test_curve_summary_skips_rounds_with_too_little_data(self):
+        out = curve_summary([{"guess_curve": {3: 2.0}}], rounds=[3], n_boot=100)
+        self.assertIsNone(out[3])
+
+
+class InteractionTests(unittest.TestCase):
+    def test_additive_effects_give_zero_interaction(self):
+        b = [1, 1, 2, 1, 2, 1, 1, 2]
+        c = [x + 8 for x in b]                      # behaviour adds 8
+        d = [x + 1 for x in b]                      # identity adds 1
+        e = [x + 9 for x in b]                      # both add 9
+        out = interaction_ci(e, d, c, b, n_boot=1000, seed=1)
+        self.assertAlmostEqual(out["interaction"], 0.0)
+        self.assertLessEqual(out["lo"], 0)
+        self.assertGreaterEqual(out["hi"], 0)
+
+    def test_non_additive_effects_are_flagged(self):
+        b = [1, 1, 2, 1, 2, 1, 1, 2]
+        c = [1, 2, 1, 1, 2, 1, 2, 1]
+        d = [1, 1, 2, 1, 1, 2, 1, 1]
+        e = [9, 10, 9, 9, 10, 9, 9, 10]              # only both together are detected
+        out = interaction_ci(e, d, c, b, n_boot=1000, seed=1)
+        self.assertGreater(out["interaction"], 6)
+        self.assertGreater(out["lo"], 0)
+
+    def test_too_few_gives_none(self):
+        self.assertIsNone(interaction_ci([1.0], [1.0, 2.0], [1.0, 2.0], [1.0, 2.0]))
 
 
 class PermutationTests(unittest.TestCase):
