@@ -151,7 +151,8 @@ Arm to flags (3 agents, 6 rounds, swap after round 3; give every arm its own `--
 | b. fresh Haiku | `--swap-at 3 --swap-agent Q --swap-inherit public --swap-guess` |
 | c. Sonnet | add `--swap-model <sonnet id>` to b |
 | d. DeepSeek | add `--swap-model deepseek/deepseek-v4-flash` to b |
-| follow-up: blend-in | d with `--swap-inherit full` |
+| e. Sonnet, full memory | c with `--swap-inherit full` |
+| f. DeepSeek, full memory | d with `--swap-inherit full` (the blend-in test) |
 
 Analysis: `python experiments/analysis/swap_analysis.py --arm a=<json> --arm b=<json> ...` gives per-arm means with 95% BCa bootstrap CIs (trial = unit) and the contrasts b-a, c-b, d-b with permutation p-values.
 

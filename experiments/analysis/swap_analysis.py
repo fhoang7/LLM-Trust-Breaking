@@ -6,8 +6,9 @@ Usage:
       --arm b=outputs/experiments/diners/3agents/..._swap_b.json [--arm c=... --arm d=...]
 
 Each file is a run_endogenous.py output with metadata.swap. Contrasts: b-a, c-b, d-b (only
-those whose arms were given). Reports unadjusted CIs and p-values and flags those that
-survive a Bonferroni correction over 3 contrasts x 2 primary measures (alpha 0.05 / 6).
+those whose arms were given), plus e-c and f-d (effect of inheriting private state). Reports
+unadjusted CIs and p-values and flags those that survive a Bonferroni correction over the
+contrasts actually reported x 2 primary measures.
 """
 import argparse
 import json
@@ -22,7 +23,7 @@ from src.endogenous.analysis.swap_stats import (  # noqa: E402
 
 PRIMARY = ("guess_score", "trust_delta")
 SECONDARY = ("coop_delta", "gap_delta")
-CONTRASTS = (("b", "a"), ("c", "b"), ("d", "b"))
+CONTRASTS = (("b", "a"), ("c", "b"), ("d", "b"), ("e", "c"), ("f", "d"))
 
 
 def load_arm(path):
@@ -56,7 +57,9 @@ def main():
         for label, rows in arms.items():
             print(f"    arm {label}: {fmt(bootstrap_ci([r[metric] for r in rows], n_boot=args.n_boot))}")
 
-    print("\nPre-specified contrasts (difference in means, 95% BCa CI, permutation p)")
+    n_contrasts = sum(1 for hi, lo in CONTRASTS if hi in arms and lo in arms)
+    family = max(1, n_contrasts * len(PRIMARY))
+    print(f"\nPre-specified contrasts (difference in means, 95% BCa CI, permutation p; Bonferroni family = {family})")
     for hi, lo in CONTRASTS:
         if hi not in arms or lo not in arms:
             continue
@@ -69,7 +72,7 @@ def main():
                 continue
             excl = ci["lo"] > 0 or ci["hi"] < 0
             bonf = "" if metric not in PRIMARY or pv is None else (
-                "  survives Bonferroni" if pv < 0.05 / 6 else "  does not survive Bonferroni")
+                "  survives Bonferroni" if pv < 0.05 / family else "  does not survive Bonferroni")
             print(f"  {hi}-{lo} {metric}: {ci['diff']:+.2f} [{ci['lo']:+.2f}, {ci['hi']:+.2f}] "
                   f"p={pv:.3f}  CI {'excludes' if excl else 'includes'} 0{bonf}")
 

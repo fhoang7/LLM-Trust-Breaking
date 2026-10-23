@@ -17,7 +17,7 @@ Default for swap runs is **public information only**:
 - Not inherited: Q's earlier private plans (the "Your private plan" lines are omitted from Q's history after the swap) and Q's own trust notes about J and M (cleared).
 - Unchanged: J's and M's trust notes about Q persist (they are the peers' opinions, not Q's state).
 
-`--swap-inherit full` keeps everything as is (plans and notes carry over). It is used by the no-op sham and by the follow-up blend-in test.
+`--swap-inherit full` keeps everything as is (plans and notes carry over). It is used by the no-op sham (a) and the blend-in arms (e, f).
 
 ## Arms
 | Arm | Replacement model | Inheritance | Purpose |
@@ -26,7 +26,10 @@ Default for swap runs is **public information only**:
 | b. fresh | Haiku 4.5 (same model) | public | Cost of the private-state reset alone; the meaningful "fresh instance" |
 | c. same family | Claude Sonnet | public | Model change within a family |
 | d. different provider | `deepseek/deepseek-v4-flash` | public | Model change across providers |
-| follow-up: blend-in | DeepSeek | full | Does inherited private state help a replacement pass unnoticed? Not in the core run |
+| e. same family, full memory | Claude Sonnet 4.5 | full | c plus the incumbent's private plans and own trust notes: can the replacement adapt and blend in? |
+| f. different provider, full memory | `deepseek/deepseek-v4-flash` | full | d plus the same inherited private state (the blend-in test). Also checks whether DeepSeek, shown a cooperative record, keeps cooperating, which separates detecting a swap from reacting to defection |
+
+Arms e and f are the blend-in tests (formerly a single optional follow-up). `full` means the replacement inherits the incumbent's earlier private plans and its own trust notes; it does not include earlier private reasoning text, which is never stored. Order: a and b first, then c and d, then e and f.
 
 Because agents are stateless, "fresh instance of the same model" is identical to the sham unless something differs; the public-only reset is that difference. Comparing b to a isolates the reset; comparing c and d to b isolates the model change.
 
@@ -71,8 +74,8 @@ Dropped: message style drift, because agents imitate each other's messages under
 ## Statistical plan
 - **Unit:** one trial. Per-trial values are computed first (peers and draws are averaged inside a trial), because J and M see the same game and the draws share a prompt, so they are not independent.
 - **Estimates:** per arm, the mean of each primary measure with a **95% bootstrap confidence interval** (percentile, 10,000 resamples of trials).
-- **Contrasts (pre-specified, only these):** b - a (effect of the private-state reset), c - b (Sonnet vs fresh Haiku), d - b (DeepSeek vs fresh Haiku). Each is reported as a difference in means with a 95% bootstrap CI and a two-sided permutation-test p-value (10,000 permutations of arm labels). An effect is called statistically supported only when its CI excludes 0; with n=10 per arm, wide intervals are expected and reported as such, not hidden.
-- **Multiple comparisons:** the 3 contrasts x 2 primary measures are the whole family; report unadjusted CIs and p-values and also flag which survive a Bonferroni correction (x6).
+- **Contrasts (pre-specified, only these):** b - a (effect of the private-state reset), c - b (Sonnet vs fresh Haiku), d - b (DeepSeek vs fresh Haiku), e - c (effect of inheriting private state, Sonnet), f - d (effect of inheriting private state, DeepSeek). Each is reported as a difference in means with a 95% bootstrap CI and a two-sided permutation-test p-value (10,000 permutations of arm labels). An effect is called statistically supported only when its CI excludes 0; with n=10 per arm, wide intervals are expected and reported as such, not hidden.
+- **Multiple comparisons:** the 5 contrasts x 2 primary measures are the whole family (10 tests when all six arms are run; fewer if arms are skipped); report unadjusted CIs and p-values and also flag which survive a Bonferroni correction over the contrasts actually reported.
 - **Sanity check:** arm a's guess score and trust change should sit near neutral; if arm a already shows high `changed_score`, the guess prompt itself is priming peers and that is fixed before reading the other arms.
 - **Follow-up for small effects:** if a contrast is suggestive but its CI includes 0, add trials to only those two arms (30-40) and report the new CI; do not pool with a different prompt version.
 - Analysis lives in an offline script that reads the saved JSON; it makes no API calls except the text coder.
