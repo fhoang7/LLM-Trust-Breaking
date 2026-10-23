@@ -22,8 +22,8 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from src.endogenous.analysis.swap_stats import (  # noqa: E402
-    bootstrap_ci, curve_summary, detection_share, diff_ci, interaction_ci,
-    permutation_pvalue, trial_metrics,
+    bootstrap_ci, curve_summary, detection_share, detection_summary, diff_ci, interaction_ci,
+    paper_metrics, permutation_pvalue, trial_metrics,
 )
 
 PRIMARY = ("guess_score", "trust_delta")
@@ -58,7 +58,7 @@ def load_arm(path):
             if r < swap["swap_at"] and any(a["stage3"].get("choice") != "CHEAP" for a in agents.values()):
                 pre_defection = True
         volatile += pre_defection
-    return {"rows": rows, "swap": swap, "n_rounds": len(rounds), "forced_rounds": forced_rounds,
+    return {"rows": rows, "paper": paper_metrics(rounds, swap["agent"], swap["swap_at"]), "swap": swap, "n_rounds": len(rounds), "forced_rounds": forced_rounds,
             "overridden": overridden, "volatile": volatile, "model_missing": model_missing}
 
 
@@ -109,6 +109,28 @@ def main():
         share = detection_share(rs, n_rounds - swap_at)
         print(f"    arm {label}: " + ", ".join(
             f"k={k + 1}: {('n/a' if v is None else f'{v:.0%}')}" for k, v in enumerate(share)))
+
+    print("\nBinary detection with exact 95% CIs (EXPLORATORY; detected = guess score above 5.5)")
+    print("    final = detected after the last round; ever = detected in any post-swap round;")
+    print("    placebo = 'detected' after the last pre-swap round, i.e. the false-positive rate")
+    for label, rs in rows.items():
+        ds = detection_summary(rs)
+        cells = []
+        for name in ("final", "ever", "placebo"):
+            c = ds[name]
+            cells.append(f"{name} " + ("n/a" if c is None else
+                         f"{c['k']}/{c['n']} [{c['lo']:.0%}, {c['hi']:.0%}]"))
+        print(f"    arm {label}: " + "   ".join(cells))
+
+    print("\nThe original paper's metrics, before vs after the swap (EXPLORATORY; mean and 95% CI over trials)")
+    print("    pd = promise deception (announced differs from planned), cb = commitment breaking (chose differs from")
+    print("    announced). Under a forced choice the swapped agent's cb/pd reflect the override, not the model.")
+    paper_keys = [f"{g}_{m}_{side}" for g in ("swapped", "incumbent") for m in ("cb", "pd") for side in ("pre", "post")]
+    for key in paper_keys + ["trust_gap"]:
+        label_text = "trust gap (trust when Q kept its commitment minus when it broke it)" if key == "trust_gap" else key
+        print(f"  {label_text}")
+        for label, a in arms.items():
+            print(f"    arm {label}: {fmt(bootstrap_ci([r[key] for r in a['paper']], n_boot=args.n_boot))}")
 
     n_contrasts = sum(1 for hi, lo in CONTRASTS if hi in arms and lo in arms)
     family = max(1, n_contrasts * len(PRIMARY))
