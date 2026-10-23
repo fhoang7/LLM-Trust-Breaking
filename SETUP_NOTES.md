@@ -111,6 +111,27 @@ What would settle it (all untried): 10+ trials per model; more games and models;
 
 Relevance to 3.3: the swap-detection signal depends on this baseline. A reliably honest incumbent makes a swap to a defector stand out, whereas a habitual liar makes changed behaviour harder to attribute to a swap.
 
+### History block (extended so agents can track what has happened over time)
+Problem: agents are stateless. Every call is `[system, user]`, and the only cross-round memory was a one-sentence trust note per peer, overwritten each round. The `.md` transcripts and the JSON log are post-hoc reports and are never fed back to agents. A peer judging "same or changed", or a model swapped in mid-run, therefore had almost nothing to go on.
+
+Change (branch `feature/history-block`, stacked on `fix/silent-api-failures`; **not merged, pending review**): an opt-in `--history` flag (requires `--use-queue`; default off, so existing results stay reproducible). When on, each agent's stage 1, 2, 3 and reflection prompts get a verbatim "HISTORY OF PREVIOUS ROUNDS" block, for every completed round:
+- every agent's public announcement (stated action and full message text);
+- every agent's final choice and payoff (reflection already showed these to everyone);
+- the viewing agent's **own** private plan.
+Never included: another agent's private plan or reasoning, or any stage-3 reasoning. Records store no reasoning text at all, so privacy is structural. The trust notes are unchanged.
+
+Design points: `src/endogenous/core/history.py` (pure functions) plus an optional `history_block` argument on the four prompt builders and about 25 lines in `run_all_trials_queued`. History is keyed by agent name, not model, so swapping `agent_models[name]` at a round boundary leaves it intact. With `--history` on, each agent entry in the JSON gets `history_seen` (the exact block that agent received that round; `""` in round 1) and `metadata.history` is `true`, so a swap analysis can show what a new model inherited. With the flag off, prompts and JSON are unchanged. Spec and plan: `docs/superpowers/specs/2026-10-23-history-block-design.md`, `docs/superpowers/plans/2026-10-23-history-block.md` (on the feature branch).
+
+Verification:
+- 14 new offline tests (rendering, privacy, builders, end-to-end with a fake queued client); with the earlier 12, 26 pass. Deliberately breaking the privacy rule (each agent shown the other's plan) made 6 tests fail.
+- Live run, Haiku 4.5, 3 agents, 1 trial, 3 rounds, `--history`: 0 failed requests, 0 parse errors, about 1.5 min. Round-1 `history_seen` was empty; in round 3 each agent's plan lines matched its own earlier plans; no stage-1 reasoning appeared in any block. Agents cite the history ("Last round demonstrated that our coordination strategy works…"). All 9 agent-rounds were CHEAP/CHEAP/CHEAP.
+
+Caveats:
+- Results with and without `--history` are not comparable: a history block changes every model's baseline behaviour. The earlier Haiku/DeepSeek numbers in this file were collected without it.
+- Seeing peers' verbatim messages made the agents imitate each other: round-2 announcements from M and Q in the live run are near-copies of each other. That may reduce the writing-style differences a peer could use to spot a swapped agent; worth checking before relying on style as the detection signal.
+- The sequential path (`run_trial` / `run_all_trials`) is not supported; `--history` without `--use-queue` is rejected with an error.
+- The new prompt-builder argument is not described in the builders' docstrings.
+
 ### Takeaways for 3.3
 - Weak models do not reliably compare announcement with choice in reflection, so their trust scores are a poor baseline for detecting a swap. Haiku does, and is the better incumbent.
 - Log parse-failure counts per agent-stage and per model before interpreting any swap effect, or parse failures can look like behaviour change.
