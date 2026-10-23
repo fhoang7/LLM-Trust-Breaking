@@ -56,6 +56,7 @@ class QueuedOpenRouterClient:
     RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
     RETRY_BASE_SECONDS = 2.0     # first backoff; doubles each attempt
     RETRY_MAX_SECONDS = 30.0     # cap on any single wait
+    TRUNCATION_RETRY_FACTOR = 3  # max_tokens multiplier when a reply is empty with finish_reason=length
 
     def _backoff_seconds(self, attempt: int, error: Optional[Exception] = None) -> float:
         """Wait before retry `attempt` (0-based), honouring a Retry-After header if sent."""
@@ -205,6 +206,9 @@ class QueuedOpenRouterClient:
         """
         custom_id = request['custom_id']
 
+        max_tokens = request.get('max_tokens') or request.get('max_completion_tokens') or 100
+        truncation_retried = False
+
         # Retry with exponential backoff
         for attempt in range(self.max_retries):
             try:
@@ -223,12 +227,7 @@ class QueuedOpenRouterClient:
                 if 'temperature' in request:
                     data['temperature'] = request['temperature']
 
-                if 'max_tokens' in request:
-                    data['max_tokens'] = request['max_tokens']
-                elif 'max_completion_tokens' in request:
-                    data['max_tokens'] = request['max_completion_tokens']
-                else:
-                    data['max_tokens'] = 100
+                data['max_tokens'] = max_tokens
 
                 # Add reasoning_effort for reasoning models (o1, o3, gpt-5)
                 if 'reasoning_effort' in request:
@@ -243,7 +242,33 @@ class QueuedOpenRouterClient:
                 async with session.post(self.base_url, headers=headers, json=data) as response:
                     response.raise_for_status()
                     response_data = await response.json()
-                    content = response_data["choices"][0]["message"]["content"]
+
+                    if not response_data.get("choices"):
+                        # HTTP 200 carrying an error body (upstream provider failure)
+                        message = (response_data.get("error") or {}).get("message", response_data)
+                        if attempt < self.max_retries - 1:
+                            await asyncio.sleep(self._backoff_seconds(attempt))
+                            continue
+                        return custom_id, {
+                            "status": "error",
+                            "error": f"No choices in response: {message}"
+                        }
+
+                    choice = response_data["choices"][0]
+                    content = choice["message"].get("content")
+
+                    if not content:
+                        # Reasoning models can spend the whole token budget on hidden
+                        # reasoning and return content=null with finish_reason="length".
+                        finish = choice.get("finish_reason")
+                        if finish == "length" and not truncation_retried:
+                            truncation_retried = True
+                            max_tokens = max_tokens * self.TRUNCATION_RETRY_FACTOR
+                            continue
+                        return custom_id, {
+                            "status": "error",
+                            "error": f"empty content (finish_reason={finish}, max_tokens={max_tokens})"
+                        }
 
                     # Try to parse JSON content
                     try:
