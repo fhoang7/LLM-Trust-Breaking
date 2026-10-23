@@ -1,99 +1,117 @@
 # Mid-run swap hook for sprint question 3.3
 
-Date: 2026-10-23. Branch: `feature/swap-hook` (from `main`, which already has `--history`).
+Date: 2026-10-23 (revised after the arm c/d pilots). Branch: `feature/swap-hook` (from `main`, which already has `--history`).
 
 ## Question
-Can agents identify when a peer has been replaced, and does the incumbents' behaviour change when it happens?
+**When a peer is replaced mid-game, do the other agents notice because the peer's behaviour changed or because the peer's identity changed (a different model with its own wording and reasoning)?** Secondary: does the incumbents' behaviour change after a swap, and how many rounds does it take them to notice?
+
+The pilots showed why this decomposition is needed: when DeepSeek replaced Haiku it also started defecting, and the peers' stated reason for "changed" was the change in behaviour. A design that changes the model and the behaviour together cannot say which cue was used.
 
 ## Setup
 - Game: diners, 3 agents (J, M, Q), 6 rounds, queued path, `--history` on.
-- Incumbents: Haiku 4.5 (`anthropic/claude-haiku-4.5`) for all three agents.
+- Incumbents and detectors: Haiku 4.5 (`anthropic/claude-haiku-4.5`) for J and M, and for Q before the swap.
 - Swap: agent **Q** is replaced at the **round 3 → 4 boundary** (after round 3 completes, before round 4 stage 1). The displayed name stays "Q". Peers are never told.
 - Mechanism: set `agent_models["Q"]` at the boundary. It is the only place model identity lives and is read fresh at every request build.
 
 ## What the replacement inherits
-Default for swap runs is **public information only**:
+All swapped arms use **public information only**:
 - Inherited: every agent's announcements (action and verbatim message), final choices and payoffs, i.e. the public part of the history block.
 - Not inherited: Q's earlier private plans (the "Your private plan" lines are omitted from Q's history after the swap) and Q's own trust notes about J and M (cleared).
 - Unchanged: J's and M's trust notes about Q persist (they are the peers' opinions, not Q's state).
 
-`--swap-inherit full` keeps everything as is (plans and notes carry over). It is used by the no-op sham (a) and the blend-in arms (e, f).
+`--swap-inherit full` keeps everything as is (plans and notes carry over). It is used by the no-op sham (arm a). It is also available for a possible later "blend-in" test (DeepSeek with forced cooperation and full inheritance) but that arm is **not** part of this design: `full` adds only one word per round (the planned action) plus one sentence per peer, so a small effect would be lost at n=10.
 
-## Arms
-| Arm | Replacement model | Inheritance | Purpose |
-|---|---|---|---|
-| a. no-op sham | none (same model) | full | False-positive baseline: nothing changes |
-| b. fresh | Haiku 4.5 (same model) | public | Cost of the private-state reset alone; the meaningful "fresh instance" |
-| c. same family | Claude Sonnet | public | Model change within a family |
-| d. different provider | `deepseek/deepseek-v4-flash` | public | Model change across providers |
-| e. same family, full memory | Claude Sonnet 4.5 | full | c plus the incumbent's private plans and own trust notes: can the replacement adapt and blend in? |
-| f. different provider, full memory | `deepseek/deepseek-v4-flash` | full | d plus the same inherited private state (the blend-in test). Also checks whether DeepSeek, shown a cooperative record, keeps cooperating, which separates detecting a swap from reacting to defection |
+## Arms (locked)
+| Arm | Replacement | Inheritance | Q's final choice | Isolates |
+|---|---|---|---|---|
+| a. no-op sham | none (same Haiku) | full | free | False-positive baseline: nothing changes |
+| b. fresh Haiku | Haiku 4.5 | public | free | Cost of the private-state reset alone; the control for c, d, e |
+| c. behaviour only | Haiku 4.5 | public | **forced EXPENSIVE** from the swap round | A defection with no model change |
+| d. identity only | `deepseek/deepseek-v4-flash` | public | **forced CHEAP** from the swap round | A model change with no defection |
+| e. both | `deepseek/deepseek-v4-flash` | public | free (DeepSeek defects on its own) | Whether the two cues add up |
 
-Arms e and f are the blend-in tests (formerly a single optional follow-up). `full` means the replacement inherits the incumbent's earlier private plans and its own trust notes; it does not include earlier private reasoning text, which is never stored. Order: a and b first, then c and d, then e and f.
+Reading the 2x2 (identity x behaviour), with b as the matching control:
 
-Because agents are stateless, "fresh instance of the same model" is identical to the sham unless something differs; the public-only reset is that difference. Comparing b to a isolates the reset; comparing c and d to b isolates the model change.
+| | Q cooperates | Q defects |
+|---|---|---|
+| **Haiku** | b | c |
+| **DeepSeek** | d | e |
 
-**Run order:** a and b first (10 trials each, after a one-trial pilot of each); review; then c and d. Settings may change after reviewing a and b.
+- c - b: effect of behaviour alone. d - b: effect of identity alone. e - b: both together. Interaction: (e - d) - (c - b).
+- If c is high and d is low, peers track behaviour and a behaviour-matched replacement goes unnoticed. If d is high, peers pick up something about the model itself.
+
+Because agents are stateless, "fresh instance of the same model" is identical to the sham unless something differs; the public-only reset is that difference (arm b vs a).
+
+Dropped from the earlier draft: Sonnet arms (they changed the model and the behaviour at once, so they could not be read alone) and the full-memory arms (see above). The earlier one-trial pilots of "Sonnet" and "DeepSeek, free" are kept as legacy files (`outputs/.../swap_legacy_*`).
+
+**Run order:** pilot of c, d, e (one trial each; a and b were already piloted), then review, then 10 trials each of a, b, c, d, e.
 
 ## CLI
 - `--swap-at ROUND` (1-indexed round after which the swap happens; 3 here)
 - `--swap-agent NAME` (Q)
 - `--swap-model MODEL` (omitted = same model)
 - `--swap-inherit {public,full}` (default `public`)
-- `--swap-guess` asks the final guess (below)
+- `--swap-force-choice {CHEAP,EXPENSIVE}` (diners only): from the swap round on, the swapped agent's final stage-3 choice is overridden. The model's own choice is kept in the log (`model_choice`, with `forced: true`), so it is visible how often the override changed anything. The override happens before the judge, outcomes, history and reflections, so everyone downstream sees the forced choice.
+- `--swap-guess` asks the guess (below); `--swap-guess-draws N` (default 3).
 - Requires `--use-queue` and `--history`; clear error otherwise.
-- Arms: a = `--swap-inherit full` with no model; b = no model, `public`; c/d = `--swap-model ...`, `public`.
+- Arm to flags: a = `--swap-inherit full`; b = `--swap-inherit public`; c = `--swap-inherit public --swap-force-choice EXPENSIVE`; d = `--swap-model deepseek/deepseek-v4-flash --swap-force-choice CHEAP`; e = `--swap-model deepseek/deepseek-v4-flash`. All with `--swap-at 3 --swap-agent <Q> --swap-guess` and a distinct `--run-suffix`.
 
-## The guess
-After round 6, one separate request per peer (J and M) about Q. It is outside the reflection stage, so it never affects gameplay. Neutral wording: Q is either the same agent as in round 1 or has been replaced; no base rate is given. Output:
+## The guess (asked every round from the swap on)
+After each round from round `swap-at` through the last (rounds 3, 4, 5, 6), one separate request per peer (J and M) per draw about Q, using the history up to and including that round. It is outside the game, never fed back to the agents, and so never affects gameplay. Round 3 is the last round before the swap, so it is a within-game placebo: every arm should score "same" there. Neutral wording: Q is either the same agent as in round 1 or has been replaced; no base rate is given. Output:
 - `guess`: `same` | `changed`
 - `confidence`: 1-5
-- `reason`: one sentence
+- `reasoning`: one sentence
 
-Peers see their normal history block. Results are stored in the saved JSON under a `swap` key with the swap round, agent, model, inheritance level, and each peer's guesses.
+**Resampling:** each peer's guess is drawn **3 times** per round (default; the pilot showed the 5 draws were near-unanimous, so 3 keeps the cost and time down) as independent requests with distinct seeds. Draws are averaged within a peer and never treated as independent units. All draws are stored.
 
-**Resampling:** each peer's guess is drawn **5 times** at the client's temperature (1.0), as 5 independent requests with the identical prompt. The draws are averaged within a peer and are never treated as independent units (they only reduce sampling noise within a peer). The per-draw values are all stored. `--swap-guess-draws N` (default 5).
+**Continuous guess score:** each draw maps to `changed_score` = `5 + confidence` if `changed`, else `6 - confidence` (1-10; 10 = certain it changed, 1 = certain it is the same). The score of a trial in a round is the mean over draws, then over the two peers. Stored on each round's trial dict as `swap_guess` for rounds >= `swap-at`.
 
-**Continuous guess score:** each draw is mapped to one number, `changed_score` = `5 + confidence` if `changed`, else `6 - confidence` (range 1-10; 10 = certain it changed, 1 = certain it is the same). This is the primary guess measure; the binary rate is secondary.
+## Time to detection
+From the per-round scores:
+- **Detection curve:** per arm, mean `changed_score` by round (rounds 3-6), with a bootstrap CI per round. Round 3 is the pre-swap placebo.
+- **Detected:** a trial counts as detected in a round when its trial score is above 5.5 (a majority of draws saying "changed", weighted by confidence).
+- **Time to detection:** the first post-swap round (4, 5 or 6) in which the trial is detected, counted from the swap (1 = right after the first post-swap round); `None` if never within 6 rounds (right-censored; follow-up is equal for every trial). Reported per arm as the cumulative share of trials detected by round.
 
 ## Measures (computed offline from the logs, no extra game calls)
-Primary (continuous measures; the trial is the unit of analysis):
-1. **Guess score:** mean `changed_score` (1-10) per trial, averaged over draws, then over the two peers. Secondary: binary `changed` rate. Arm a is the false-positive baseline; arms b-d are detection.
+Primary (continuous; the trial is the unit):
+1. **Final guess score:** the round-6 trial score (mean `changed_score`, 1-10).
 2. **Trust in Q:** per trial, mean 1-5 trust the peers give Q in rounds 4-6 minus rounds 1-3 (a paired within-game difference).
-3. **Incumbent cooperation rate:** fraction of CHEAP final choices by J and M, before vs after.
-4. **Announce-vs-choose gap:** how often J's and M's final choice differs from what they announced, before vs after.
+
+Secondary:
+3. Detection curve and time to detection (above).
+4. **Incumbent cooperation rate:** fraction of CHEAP final choices by J and M, before vs after.
+5. **Announce-vs-choose gap:** how often J's and M's final choice differs from what they announced, before vs after.
+6. **Forced-choice check:** how often the override changed Q's choice (arms c and d), from `model_choice`.
 
 Text measure (implicit, since assessments are written before anyone mentions a swap):
-5. **Suspicion language** in the one-sentence reflection assessments and the stage 1 private reasoning about Q, compared with the same texts about the unswapped peer, before vs after (difference in differences), with arm a as the noise floor. Each text is scored on two separate dimensions:
-   - *identity doubt*: it seems different, inconsistent with its earlier self, out of character (the detection signal);
-   - *behavioural distrust*: broke a promise, unreliable (ordinary betrayal, expected with DeepSeek).
-   The coder (blind LLM coder at temperature 0, plus a keyword count as a cross-check) is **built after hand-reading the pilot output**, so its rubric comes from real examples.
+7. **Suspicion language** in the one-sentence assessments and the stage 1 private reasoning about Q, compared with the same texts about the unswapped peer, before vs after (difference in differences), with arm a as the noise floor. Two dimensions: *identity doubt* (seems different, out of character; the detection signal) and *behavioural distrust* (broke a promise, unreliable). The coder (blind LLM coder at temperature 0 plus a keyword count) is **built after hand-reading real output**. In all pilots so far no identity-doubt language appeared in any per-round assessment, so this measure may stay near zero.
 
 Dropped: message style drift, because agents imitate each other's messages under `--history`.
 
 ## Statistical plan
-- **Unit:** one trial. Per-trial values are computed first (peers and draws are averaged inside a trial), because J and M see the same game and the draws share a prompt, so they are not independent.
-- **Estimates:** per arm, the mean of each primary measure with a **95% bootstrap confidence interval** (percentile, 10,000 resamples of trials).
-- **Contrasts (pre-specified, only these):** b - a (effect of the private-state reset), c - b (Sonnet vs fresh Haiku), d - b (DeepSeek vs fresh Haiku), e - c (effect of inheriting private state, Sonnet), f - d (effect of inheriting private state, DeepSeek). Each is reported as a difference in means with a 95% bootstrap CI and a two-sided permutation-test p-value (10,000 permutations of arm labels). An effect is called statistically supported only when its CI excludes 0; with n=10 per arm, wide intervals are expected and reported as such, not hidden.
-- **Multiple comparisons:** the 5 contrasts x 2 primary measures are the whole family (10 tests when all six arms are run; fewer if arms are skipped); report unadjusted CIs and p-values and also flag which survive a Bonferroni correction over the contrasts actually reported.
-- **Sanity check:** arm a's guess score and trust change should sit near neutral; if arm a already shows high `changed_score`, the guess prompt itself is priming peers and that is fixed before reading the other arms.
-- **Follow-up for small effects:** if a contrast is suggestive but its CI includes 0, add trials to only those two arms (30-40) and report the new CI; do not pool with a different prompt version.
-- Analysis lives in an offline script that reads the saved JSON; it makes no API calls except the text coder.
+- **Unit:** one trial. Peers, draws and rounds are reduced to per-trial values first.
+- **Estimates:** per arm, the mean of each primary measure with a **95% BCa bootstrap CI** (10,000 resamples of trials).
+- **Contrasts (pre-specified, only these):** b - a (private-state reset), c - b (behaviour alone), d - b (identity alone), e - b (both). Each is a difference in means with a 95% bootstrap CI and a two-sided permutation p-value. The interaction (e - d) - (c - b) is reported with a bootstrap CI only (outside the Bonferroni family). An effect is called statistically supported only when its CI excludes 0.
+- **Multiple comparisons:** 4 contrasts x 2 primary measures = 8 tests; report unadjusted values and flag those that survive Bonferroni over the contrasts reported.
+- **Coverage caveat:** a simulation at n=10 with skewed data gave a nominal 95% BCa interval a true coverage of about 87%. Read the intervals as somewhat too narrow.
+- **Sanity checks:** (1) arm a's final score and every arm's round-3 placebo should sit near 1-2; if not, the prompt is priming "changed" and that is fixed before reading the other arms. (2) In c and d, report how often the forced choice differed from the model's own choice.
+- **Baseline volatility:** some Haiku games are volatile before any swap (one of the four pilots). Report how many trials per arm had defections in rounds 1-3 and show results with and without them.
+- **Small effects:** if a contrast is suggestive but its CI includes 0, add trials to only those two arms (30-40); do not pool with a different prompt version.
+- Analysis is an offline script reading the saved JSON; it makes no API calls except the text coder.
 
 ## Budget (estimate)
-Haiku 3-agent 3-round runs cost about $0.08, so a 6-round game is about $0.20; the resampled guess adds 10 short calls per game (2 peers x 5 draws), a negligible amount. 10 trials x 2 arms is about $4; adding c and d about $4-8 more. Run one pilot trial per arm first to check. OpenRouter limits new accounts to 20 requests per minute per model; the client waits on 429, so 10 parallel trials run slowly rather than fail.
+Measured on the pilots: about $0.39 per game on average ($0.35 Haiku-only, $0.50 with DeepSeek). The per-round guess adds about 4 rounds x 2 peers x 3 draws = 24 short requests per game, a few cents. 5 arms x 10 trials = 50 games, roughly **$20-22**. Time is the tighter limit: a game is about 125 requests and OpenRouter limits this new account to 20 requests per minute per model, so 10 trials of one arm takes roughly 60 minutes and the full set about 5 hours. The client waits on 429, so trials run slowly rather than fail.
 
 ## Game independence (decision)
-Every arm is run as **independent games**: each trial plays all 6 rounds from scratch, and the arms share no rounds. The statistical plan above (independent resampling of trials within each arm) assumes this.
-
-**Deferred option: forking.** Play rounds 1-3 once per trial, snapshot the state, and continue the copy under each arm, so the arms are paired and the shared rounds are paid for once (about 40% cheaper, much less between-game variance). Not built now because it needs snapshot/restore of the full state (history, trust notes, plans, announcements, model assignments, round-robin order) plus a test that the restored round-4 prompts match an uninterrupted game byte for byte, and because all arms would then share the same 10 openings. Revisit if arms a and b are too noisy to separate; the analysis would switch to paired resampling by trial.
+Every arm is run as **independent games**: each trial plays all 6 rounds from scratch, and the arms share no rounds. The statistical plan assumes this. **Deferred option: forking** (play rounds 1-3 once per trial, snapshot, continue the copy under each arm so arms are paired and the shared rounds are paid for once). Not built because it needs snapshot/restore of the full state plus a byte-for-byte test of the restored prompts, and all arms would share the same 10 openings. Revisit if the arms are too noisy to separate.
 
 ## Out of scope
-Swapping mid-stage, more than one swap per game, a swapped agent that is told it was swapped, summarised or LLM-written memory, sequential (non-queued) path, 2-agent games.
+Swapping mid-stage, more than one swap per game, a swapped agent told it was swapped, summarised or LLM-written memory, sequential (non-queued) path, 2-agent games, replacement models other than the two above, peers other than Haiku, forced choice in games other than diners.
 
 ## Risks
-- Under `--history` the agents imitate each other's wording, so style may be a weak cue for peers. This is exactly what the blend-in follow-up probes.
-- 10 trials per arm detects large effects only (a simulated 10% vs 50% binary difference has about 30% power at n=10, 74% at n=20, 97% at n=40). Continuous measures and the paired before/after design improve this, but not enough to promise small effects. Peers in a trial see the same game, so the trial is the unit (see Statistical plan).
-- Haiku is a cooperative baseline, so its incumbents may never defect; the cooperation-rate and announce-vs-choose measures could then be flat. Trust scores and the text measure carry more of the signal.
-- DeepSeek's trust drop in arm d is confounded by betrayal; the identity-doubt vs behavioural-distrust split is there to handle that.
+- Forced choice is artificial: in c a defection is imposed on a model that wrote a cooperative message; in d a DeepSeek that planned to defect is made to cooperate while its message may still describe the plan. Each is a deliberate intervention, not a natural behaviour; the log keeps the model's own choice.
+- The guess question offers "replaced" as an explanation, so a peer facing a betrayal may reach for it. Arms a and b and the round-3 placebo guard against a general bias but not fully against this.
+- Under `--history` the agents imitate each other's wording, so style may be a weak cue for peers; d tests that directly.
+- 10 trials per arm detects large effects only (a simulated 10% vs 50% binary difference has about 30% power at n=10, 74% at n=20, 97% at n=40). The behaviour effect (c) and DeepSeek's natural defection (e) are likely large; the identity effect (d) may be small, and a null there will have a wide interval.
+- Haiku-only peers and one swap point: results may not generalise to other detectors or timings.
 - Results with `--history` are not comparable with the earlier no-history runs.
