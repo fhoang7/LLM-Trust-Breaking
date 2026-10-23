@@ -2,6 +2,7 @@
 from __future__ import annotations
 from typing import List, Dict, Any, Optional, Callable
 import asyncio
+from collections import Counter
 import aiohttp
 import json
 import time
@@ -187,7 +188,20 @@ class QueuedOpenRouterClient:
             # Wait for all workers to finish
             await asyncio.gather(*workers)
 
+        self._print_failure_summary(results, total_requests)
         return results
+
+    @staticmethod
+    def _print_failure_summary(results: Dict[str, Any], total_requests: int) -> None:
+        """Print how many requests failed and why, so failures are not silent downstream."""
+        reasons = Counter(
+            r["error"][:70] for r in results.values()
+            if isinstance(r, dict) and r.get("status") == "error"
+        )
+        if reasons:
+            print(f"  WARNING: {sum(reasons.values())}/{total_requests} requests failed:")
+            for reason, n in reasons.most_common():
+                print(f"    {n} x {reason}")
 
     async def _execute_single_async(
         self,
