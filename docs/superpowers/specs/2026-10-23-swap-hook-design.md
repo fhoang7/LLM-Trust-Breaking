@@ -80,6 +80,11 @@ Dropped: message style drift, because agents imitate each other's messages under
 ## Budget (estimate)
 Haiku 3-agent 3-round runs cost about $0.08, so a 6-round game is about $0.20; the resampled guess adds 10 short calls per game (2 peers x 5 draws), a negligible amount. 10 trials x 2 arms is about $4; adding c and d about $4-8 more. Run one pilot trial per arm first to check. OpenRouter limits new accounts to 20 requests per minute per model; the client waits on 429, so 10 parallel trials run slowly rather than fail.
 
+## Game independence (decision)
+Every arm is run as **independent games**: each trial plays all 6 rounds from scratch, and the arms share no rounds. The statistical plan above (independent resampling of trials within each arm) assumes this.
+
+**Deferred option: forking.** Play rounds 1-3 once per trial, snapshot the state, and continue the copy under each arm, so the arms are paired and the shared rounds are paid for once (about 40% cheaper, much less between-game variance). Not built now because it needs snapshot/restore of the full state (history, trust notes, plans, announcements, model assignments, round-robin order) plus a test that the restored round-4 prompts match an uninterrupted game byte for byte, and because all arms would then share the same 10 openings. Revisit if arms a and b are too noisy to separate; the analysis would switch to paired resampling by trial.
+
 ## Out of scope
 Swapping mid-stage, more than one swap per game, a swapped agent that is told it was swapped, summarised or LLM-written memory, sequential (non-queued) path, 2-agent games.
 
