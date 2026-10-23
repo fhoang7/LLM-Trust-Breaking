@@ -1,8 +1,8 @@
 import unittest
 
 from src.endogenous.analysis.swap_stats import (
-    bootstrap_ci, curve_summary, detection_share, diff_ci, interaction_ci,
-    permutation_pvalue, trial_metrics,
+    bootstrap_ci, curve_summary, detection_share, detection_summary, diff_ci,
+    exact_binomial_ci, interaction_ci, paper_metrics, permutation_pvalue, trial_metrics,
 )
 
 
@@ -138,6 +138,69 @@ class CurveTests(unittest.TestCase):
     def test_curve_summary_skips_rounds_with_too_little_data(self):
         out = curve_summary([{"guess_curve": {3: 2.0}}], rounds=[3], n_boot=100)
         self.assertIsNone(out[3])
+
+
+class BinomialTests(unittest.TestCase):
+    def test_exact_interval_matches_known_values(self):
+        # Clopper-Pearson 95% for 0/10 is [0, 0.308]; for 10/10 it is [0.692, 1]; for 5/10 [0.187, 0.813]
+        z = exact_binomial_ci(0, 10)
+        self.assertEqual((z["lo"], round(z["hi"], 3)), (0.0, 0.308))
+        o = exact_binomial_ci(10, 10)
+        self.assertEqual((round(o["lo"], 3), o["hi"]), (0.692, 1.0))
+        h = exact_binomial_ci(5, 10)
+        self.assertEqual((round(h["lo"], 3), round(h["hi"], 3)), (0.187, 0.813))
+        self.assertEqual(h["rate"], 0.5)
+
+    def test_empty_gives_none(self):
+        self.assertIsNone(exact_binomial_ci(0, 0))
+
+    def test_detection_summary_counts_final_ever_and_placebo(self):
+        rows = [
+            {"guess_score": 9.0, "placebo_score": 1.5, "time_to_detection": 1},
+            {"guess_score": 2.0, "placebo_score": 7.0, "time_to_detection": None},
+            {"guess_score": 8.0, "placebo_score": 2.0, "time_to_detection": 2},
+            {"guess_score": None, "placebo_score": None, "time_to_detection": None},   # no guess data
+        ]
+        out = detection_summary(rows)
+        self.assertEqual((out["final"]["k"], out["final"]["n"]), (2, 3))
+        self.assertEqual((out["ever"]["k"], out["ever"]["n"]), (2, 3))      # the trial without data is excluded
+        self.assertEqual((out["placebo"]["k"], out["placebo"]["n"]), (1, 3))
+
+
+class PaperMetricsTests(unittest.TestCase):
+    def rounds(self):
+        # 4 rounds, swap after round 2. Q: keeps promises pre, breaks post. J,M: keep promises always.
+        out = []
+        for r in range(4):
+            post = r >= 2
+            def ag(pd, cb, q_score=None):
+                a = {"promise_deception": pd, "commitment_breaking": cb,
+                     "stage2": {"stated_action": "CHEAP"}, "stage3": {"choice": "CHEAP"}}
+                if q_score is not None:
+                    a["reflection"] = {"takeaways": {"Q": {"score": q_score, "assessment": "x"}}}
+                return a
+            agents = {"J": ag(False, False, 5 if not post else 1), "M": ag(False, False, 5 if not post else 1),
+                      "Q": ag(post, post)}      # Q deceives and breaks only after the swap
+            out.append({"round_id": r, "trials": [{"trial_id": 0, "agents": agents}]})
+        return out
+
+    def test_rates_before_and_after_for_swapped_and_incumbents(self):
+        m = paper_metrics(self.rounds(), "Q", 2)[0]
+        self.assertEqual(m["swapped_cb_pre"], 0.0)
+        self.assertEqual(m["swapped_cb_post"], 1.0)
+        self.assertEqual(m["swapped_pd_post"], 1.0)
+        self.assertEqual(m["incumbent_cb_pre"], 0.0)
+        self.assertEqual(m["incumbent_cb_post"], 0.0)
+
+    def test_trust_gap_is_kept_minus_broken(self):
+        m = paper_metrics(self.rounds(), "Q", 2)[0]
+        self.assertEqual(m["trust_gap"], 5.0 - 1.0)           # peers trusted Q at 5 when it kept, 1 when it broke
+
+    def test_trust_gap_is_none_without_both_kinds_of_round(self):
+        rounds = self.rounds()
+        for r in rounds:
+            r["trials"][0]["agents"]["Q"]["commitment_breaking"] = False
+        self.assertIsNone(paper_metrics(rounds, "Q", 2)[0]["trust_gap"])
 
 
 class InteractionTests(unittest.TestCase):

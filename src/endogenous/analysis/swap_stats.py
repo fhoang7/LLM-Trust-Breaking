@@ -4,6 +4,7 @@ The trial is the unit of analysis: peers and guess draws are averaged inside a t
 anything is resampled, because the peers see the same game.
 """
 import random
+from math import comb
 from statistics import NormalDist
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -219,3 +220,88 @@ def interaction_ci(e: Sequence[Optional[float]], d: Sequence[Optional[float]],
             jack.append(stat([g2[:i] + g2[i + 1:] if gj == gi else g2 for gj, g2 in enumerate(groups)]))
     lo, hi = _bca(boot, theta, jack, alpha)
     return {"interaction": theta, "lo": lo, "hi": hi, "n": sizes}
+
+
+# ---------------------------------------------------------------------------
+# Binary detection rates with exact intervals
+# ---------------------------------------------------------------------------
+
+def _binom_tail_ge(k: int, n: int, p: float) -> float:
+    return sum(comb(n, i) * p ** i * (1 - p) ** (n - i) for i in range(k, n + 1))
+
+
+def exact_binomial_ci(k: int, n: int, alpha: float = 0.05) -> Optional[Dict[str, Any]]:
+    """Clopper-Pearson exact interval for k successes in n trials (no scipy needed)."""
+    if n <= 0:
+        return None
+
+    def bisect(f, target):            # f increasing in p
+        lo, hi = 0.0, 1.0
+        for _ in range(80):
+            mid = (lo + hi) / 2
+            if f(mid) < target:
+                lo = mid
+            else:
+                hi = mid
+        return (lo + hi) / 2
+
+    lower = 0.0 if k == 0 else bisect(lambda p: _binom_tail_ge(k, n, p), alpha / 2)
+    upper = 1.0 if k == n else bisect(lambda p: _binom_tail_ge(k + 1, n, p), 1 - alpha / 2)
+    return {"rate": k / n, "lo": lower, "hi": upper, "k": k, "n": n}
+
+
+def detection_summary(rows: Sequence[Dict[str, Any]]) -> Dict[str, Optional[Dict[str, Any]]]:
+    """Binary detection per arm with exact intervals.
+
+    final: guess score above DETECTED_ABOVE after the last round. ever: detected in any
+    post-swap round. placebo: score above DETECTED_ABOVE after the last pre-swap round, i.e.
+    the false-positive rate (nothing has changed yet). Trials without guess data are excluded.
+    """
+    def count(flags):
+        flags = [f for f in flags if f is not None]
+        return exact_binomial_ci(sum(flags), len(flags))
+
+    return {
+        "final": count([None if r["guess_score"] is None else r["guess_score"] > DETECTED_ABOVE for r in rows]),
+        "ever": count([None if r["guess_score"] is None and r["time_to_detection"] is None
+                       else r["time_to_detection"] is not None for r in rows]),
+        "placebo": count([None if r["placebo_score"] is None else r["placebo_score"] > DETECTED_ABOVE for r in rows]),
+    }
+
+
+# ---------------------------------------------------------------------------
+# The original paper's metrics, per trial, before and after the swap
+# ---------------------------------------------------------------------------
+
+def paper_metrics(rounds: List[Dict[str, Any]], swap_agent: str, swap_at: int) -> List[Dict[str, Optional[float]]]:
+    """Promise-deception (pd) and commitment-breaking (cb) rates before and after the swap.
+
+    Keys: {swapped|incumbent}_{pd|cb}_{pre|post}, plus trust_gap = mean trust the incumbents
+    gave the swapped agent in rounds where it kept its commitment minus rounds where it broke it
+    (the "does trust track betrayal" check from the original work). Note that under a forced
+    choice the swapped agent's cb reflects the override, not the model.
+    """
+    out = []
+    for tid in range(len(rounds[0]["trials"])):
+        flags = {}
+        kept, broke = [], []
+        for r, rnd in enumerate(rounds):
+            side = "post" if r >= swap_at else "pre"
+            agents = rnd["trials"][tid]["agents"]
+            for name, a in agents.items():
+                group = "swapped" if name == swap_agent else "incumbent"
+                for metric, field in (("pd", "promise_deception"), ("cb", "commitment_breaking")):
+                    if a.get(field) is not None:
+                        flags.setdefault(f"{group}_{metric}_{side}", []).append(bool(a[field]))
+            q_broke = agents[swap_agent].get("commitment_breaking")
+            if q_broke is not None:
+                for name, a in agents.items():
+                    score = ((a.get("reflection") or {}).get("takeaways") or {}).get(swap_agent, {}).get("score") \
+                        if name != swap_agent else None
+                    if score is not None:
+                        (broke if q_broke else kept).append(float(score))
+        row = {f"{g}_{m}_{s}": _rate(flags.get(f"{g}_{m}_{s}", []))
+               for g in ("swapped", "incumbent") for m in ("pd", "cb") for s in ("pre", "post")}
+        row["trust_gap"] = _mean(kept) - _mean(broke) if kept and broke else None
+        out.append(row)
+    return out
