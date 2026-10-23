@@ -177,9 +177,14 @@ def main():
                         help=("public (default): the replacement sees public history only and has no trust notes. "
                               "full: its private plans and trust notes carry over."))
     parser.add_argument("--swap-guess", action="store_true",
-                        help="After the last round, ask each peer whether the swapped agent is the same or changed.")
-    parser.add_argument("--swap-guess-draws", type=int, default=5,
-                        help="Independent guess draws per peer (default: 5).")
+                        help=("After every round from the last one before the swap onward, ask each peer "
+                              "whether the swapped agent is the same or changed (separate calls, never "
+                              "fed back to the agents)."))
+    parser.add_argument("--swap-guess-draws", type=int, default=3,
+                        help="Independent guess draws per peer per round (default: 3).")
+    parser.add_argument("--swap-force-choice", type=str, default=None, metavar="{CHEAP,EXPENSIVE}",
+                        help=("Diners only: from the swap round on, override the swapped agent's final "
+                              "choice. The model's own choice is kept in the log as model_choice."))
 
     # Stage 3 ablation
     parser.add_argument(
@@ -249,6 +254,7 @@ def main():
         swap = build_swap_config(
             swap_at=args.swap_at, agent=args.swap_agent, model=args.swap_model,
             inherit=args.swap_inherit, guess=args.swap_guess, guess_draws=args.swap_guess_draws,
+            force_choice=args.swap_force_choice, game_type=args.game,
             agent_names=agent_names, n_rounds=args.rounds,
             use_queue=args.use_queue, use_history=args.history,
         )
