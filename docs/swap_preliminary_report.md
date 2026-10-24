@@ -23,6 +23,7 @@ Q's identity (or the lack of it) is the only thing that differs in d; the behavi
 3. **No evidence that identity adds anything beyond behaviour.** The interaction (e-d)-(c-b) on the guess score is +0.9 [-2.3, +4.0]; once pre-swap-volatile games are removed it is -1.0 [-4.6, +0.3]. Identity and behaviour cues look additive, with identity contributing about nothing here.
 4. **The peers' stated reasons agree.** In c, 97% of post-swap reasons cite a behaviour change and 2% cite continuity. In e it is 83% and 17%. In d it is 24% and 73%.
 5. **The incumbents change what they do.** After Q's defections J and M cooperate less (cooperation rate -0.17 in c, -0.33 in e, vs -0.03 in the sham), and their own commitment-breaking rate rises from 0.10 to 0.27 (c) and 0.05 to 0.30 (e).
+6. **Group cooperation falls when the replacement defects, and part of the fall is the other two agents.** The share of all three agents' choices that were CHEAP fell from about 0.9 to about 0.5 in c (-0.40 [-0.51, -0.19]) and e (-0.42 [-0.56, -0.31]) and did not move in the model-only swap d (-0.08 [-0.27, 0.00]). In e, about half of the fall (-0.22 of -0.42) comes from J and M lowering their own cooperation; in c most of it (-0.29 of -0.40) is the forced defection itself. Exploratory (see "Group-wide cooperation").
 
 ## Primary results (all 10 games per arm)
 
@@ -102,6 +103,27 @@ Peers also never raise the idea unprompted. In 0 of 60 post-swap incumbent trust
 - **One genuine identity-like cue.** In d trial 3 Q's round-4 announcement was an empty string, and both peers called it a change ("sudden silence after three rounds of eloquent announcements"). Empty announcements occur at 2-3 of 180 per arm, including Haiku-only arms, so this is an occasional model glitch, not a DeepSeek trait. It shows how a stylistic discontinuity *can* be detected, but it is one game.
 - **Under `--history` the agents imitate each other's wording**, which reads as continuity and probably makes style-based detection harder than it would be in a setting without a shared transcript.
 
+## Group-wide cooperation (exploratory)
+
+Does the group as a whole cooperate less after the replacement defects? Measured as the share of final choices that were CHEAP among all three agents, rounds 4-6 minus rounds 1-3, per game (95% BCa CI over games). Also split into the part due to the swapped agent's own choices and the part due to J and M. Script: `experiments/analysis/swap_group_cooperation.py`.
+
+| Arm | Group before | Group after | Group change | From the swapped agent | From J and M |
+|---|---|---|---|---|---|
+| a (no-op) | 0.92 | 0.87 | -0.06 [-0.27, -0.01] | -0.03 | -0.02 |
+| b (fresh instance) | 0.74 | 0.84 | +0.10 [+0.02, +0.21] | +0.02 | +0.08 |
+| c (same model, forced defect) | 0.89 | 0.49 | **-0.40 [-0.51, -0.19]** | -0.29 [-0.32, -0.23] | -0.11 [-0.22, +0.01] |
+| d (other model, forced cooperate) | 0.93 | 0.86 | -0.08 [-0.27, 0.00] | +0.02 | -0.10 [-0.28, -0.01] |
+| e (other model, free) | 0.96 | 0.53 | **-0.42 [-0.56, -0.31]** | -0.20 [-0.26, -0.16] | -0.22 [-0.32, -0.14] |
+
+Contrasts against the no-op arm: c-a -0.34 [-0.48, -0.12] (p=0.003), e-a -0.37 [-0.50, -0.21] (p=0.001). Against b the contrast is distorted by b's unstable baseline (5 of 10 games with a defection before the swap). On games that were stable before the swap, a and b show exactly zero change, and: c -0.46 [-0.54, -0.41] (n=7), e -0.42 [-0.59, -0.30] (n=8), d -0.03 [-0.19, 0.00] (n=7).
+
+Reading it:
+- **Behaviour, not the model, moves group cooperation.** The model-only swap (d) leaves it close to unchanged; both defection arms drop it by about 40 points.
+- **Two sources of the fall.** The swapped agent's own defections are part of the group figure by construction. In c they are forced, so most of the c fall (-0.29 of -0.40) is mechanical. In e, where DeepSeek defects on its own, the swapped agent accounts for -0.20 and J and M for -0.22, so roughly half the fall is the other two agents becoming less cooperative.
+- **The contagion claim should rest on the J and M column**, not the group column, because the group column includes the choice we forced in c.
+- **Mechanism untested.** "Retaliation" is a reading: the data show J and M choosing EXPENSIVE more often after the betrayal, and their trust notes drop, but we did not test why. In d, J and M also cooperate somewhat less (-0.10) although the replacement kept cooperating; some of that is games where an incumbent defected on its own, so the contagion is not unique to defection by the replacement.
+- Exploratory: outside the Bonferroni family. 10 games per arm; stable subsets are 5-8.
+
 ## Paper metrics and trust (exploratory)
 
 - Trust gap (trust when Q kept its commitment minus when it broke it): c 2.90 [1.55, 3.60], e 3.13 [2.55, 3.59]. Peers punish broken commitments sharply. a, b and d have too few broken commitments for a stable estimate (n = 2, 4, 3).
@@ -136,7 +158,8 @@ Peers also never raise the idea unprompted. In 0 of 60 post-swap incumbent trust
 python experiments/analysis/swap_analysis.py --arm a=... --arm b=... --arm c=... --arm d=... --arm e=...
 python experiments/analysis/swap_analysis.py <same arms> --stable-only
 python experiments/analysis/swap_reasons.py <same arms> --dump outputs/analysis/swap_reasons_n10.json
+python experiments/analysis/swap_group_cooperation.py <same arms>
 ```
 
-Run files: `outputs/experiments/diners/3agents/anthropic_claude-haiku-4.5_endogenous_swap_{a,b,c,d,e}_n10.json` (gitignored). Analysis text: `outputs/analysis/swap_n10_analysis.txt`, `swap_n10_stable_analysis.txt`, `swap_n10_reasons.txt`. Transcripts: `outputs/transcripts/diners/swap_{a..e}_n10/`.
+Run files: `outputs/experiments/diners/3agents/anthropic_claude-haiku-4.5_endogenous_swap_{a,b,c,d,e}_n10.json` (gitignored). Analysis text: `outputs/analysis/swap_n10_analysis.txt`, `swap_n10_stable_analysis.txt`, `swap_n10_reasons.txt`, `swap_n10_group_cooperation.txt`. Transcripts: `outputs/transcripts/diners/swap_{a..e}_n10/`.
 Cost: about $22 of credit for this batch, of which roughly $5 went on the two discarded runs (b and c) that hit the credit limit.
