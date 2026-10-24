@@ -33,7 +33,7 @@ ARM_NAMES = {"a": "no-op sham", "b": "fresh Haiku", "c": "Haiku, forced EXPENSIV
              "d": "DeepSeek, forced CHEAP", "e": "DeepSeek, free"}
 
 
-def load_arm(path):
+def load_arm(path, stable_only=False):
     with open(path) as f:
         data = json.load(f)
     meta = data["analysis"]["metadata"] if "analysis" in data else data["metadata"]
@@ -46,6 +46,7 @@ def load_arm(path):
     # Checks that need the raw logs: did the override change anything, and how volatile was
     # the baseline before the swap?
     forced_rounds = overridden = volatile = model_missing = 0
+    volatile_ids = set()
     for tid in range(len(rounds[0]["trials"])):
         pre_defection = False
         for r, rnd in enumerate(rounds):
@@ -58,7 +59,13 @@ def load_arm(path):
             if r < swap["swap_at"] and any(a["stage3"].get("choice") != "CHEAP" for a in agents.values()):
                 pre_defection = True
         volatile += pre_defection
-    return {"rows": rows, "paper": paper_metrics(rounds, swap["agent"], swap["swap_at"]), "swap": swap, "n_rounds": len(rounds), "forced_rounds": forced_rounds,
+        if pre_defection:
+            volatile_ids.add(tid)
+    paper = paper_metrics(rounds, swap["agent"], swap["swap_at"])
+    if stable_only:
+        rows = [r for tid, r in enumerate(rows) if tid not in volatile_ids]
+        paper = [r for tid, r in enumerate(paper) if tid not in volatile_ids]
+    return {"rows": rows, "paper": paper, "swap": swap, "n_rounds": len(rounds), "forced_rounds": forced_rounds,
             "overridden": overridden, "volatile": volatile, "model_missing": model_missing}
 
 
@@ -70,13 +77,15 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--arm", action="append", required=True, help="label=path, e.g. a=run_a.json")
     p.add_argument("--n-boot", type=int, default=10000)
+    p.add_argument("--stable-only", action="store_true",
+                   help="sensitivity analysis: drop trials where any agent defected in rounds 1..swap_at")
     p.add_argument("--plot", type=str, default=None, help="write the detection-curve figure to this PNG")
     args = p.parse_args()
 
     arms = {}
     for spec in args.arm:
         label, path = spec.split("=", 1)
-        arms[label] = load_arm(path)
+        arms[label] = load_arm(path, args.stable_only)
     rows = {label: a["rows"] for label, a in arms.items()}
     first = next(iter(arms.values()))
     swap_at, n_rounds = first["swap"]["swap_at"], first["n_rounds"]
@@ -87,7 +96,7 @@ def main():
         if a["forced_rounds"]:
             extra = (f"; override changed the model's choice in {a['overridden']}/{a['forced_rounds']} forced rounds"
                      f" (model's own answer missing in {a['model_missing']})")
-        print(f"  {label} ({ARM_NAMES.get(label, '?')}): {len(a['rows'])} trials; "
+        print(f"  {label} ({ARM_NAMES.get(label, '?')}): {len(a['rows'])} trials{' (stable-only)' if args.stable_only else ''}; "
               f"{a['volatile']} with a defection in rounds 1-{swap_at} (before any swap){extra}")
 
     print("\nPer-arm means with 95% BCa bootstrap CI (trial = unit)")
