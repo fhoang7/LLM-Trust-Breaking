@@ -8,7 +8,8 @@ Writes, with scenarios numbered 1-5 (a-e in the code):
   table1_results.html / .csv     one row per scenario: means with 95% percentile CIs, binary detection with
                                  exact CIs, false-positive rate, group cooperation change
   table2_contrasts.html / .csv   the pre-specified contrasts and the interaction
-  tables.docx                    both tables as editable Word tables (opens in Google Docs); needs python-docx
+  table3_cooperation.csv         exploratory contrasts on cooperation (also in tables.html / tables.docx)
+  tables.docx                    the tables as editable Word tables (opens in Google Docs); needs python-docx
   fig_time_to_detection.png/.pdf mean guess score by round, and cumulative share of games detected
 
 The HTML opens in a browser; select the table and paste into Google Docs to keep it as a table.
@@ -165,6 +166,27 @@ def build_tables(arms, n_boot):
     return (header1, table1), (header2, table2)
 
 
+def build_cooperation_table(arms, n_boot):
+    """Exploratory contrasts on cooperation: the whole group, and the two agents who were not replaced."""
+    header = ["Comparison", "Isolates", "All three agents: difference [95% CI]", "p",
+              "J and M only: difference [95% CI]", "p"]
+    rows = []
+    for hi, lo, _ in CONTRASTS:
+        if hi not in arms or lo not in arms:
+            continue
+        label, _, isolates = CONTRAST_LABELS[(hi, lo)]
+        cells = [label, isolates]
+        for key in ("group_delta", "inc_delta"):
+            x = [c[key] for c in arms[hi]["coop"]]
+            y = [c[key] for c in arms[lo]["coop"]]
+            ci = diff_ci(x, y, n_boot=n_boot)
+            pv = permutation_pvalue(x, y, n_perm=n_boot)
+            cells += ["n/a" if ci is None else f"{num(ci['diff'], 2, True)} [{num(ci['lo'], 2, True)}, "
+                                               f"{num(ci['hi'], 2, True)}]", p_text(pv)]
+        rows.append(cells)
+    return header, rows
+
+
 def html_table(title, header, rows, note):
     th = "".join(f"<th style='border:1px solid #999;padding:4px 8px;text-align:left;background:#f1f0ec'>{html.escape(h)}</th>" for h in header)
     def cell(c):
@@ -206,7 +228,8 @@ def write_docx(path, tables):
                       6: [1.6, 1.25, 1.25, 1.85, 1.85, 1.6],                      # results by scenario
                       4: [3.2, 0.7, 2.7, 2.9]}                                    # default behaviour
 
-    for title, header, rows, note in tables:
+    for item in tables:
+        title, header, rows, note = item[:4]
         heading = doc.add_paragraph()
         run = heading.add_run(title)
         run.bold = True
@@ -222,7 +245,7 @@ def write_docx(path, tables):
                 is_bold = text.startswith("**") and text.endswith("**")
                 cell.text = ""
                 cell.paragraphs[0].add_run(text[2:-2] if is_bold else text).bold = is_bold
-        widths = widths_by_cols.get(len(header))
+        widths = item[4] if len(item) > 4 else widths_by_cols.get(len(header))
         if widths:
             table.autofit = False
             for row in table.rows:
@@ -473,16 +496,31 @@ def main():
              "(Bonferroni correction over 4 contrasts × 2 measures); significant results are in bold. The interaction "
              "row asks whether the behaviour effect depends on the model; zero means the two effects simply add up. "
              "It is reported with an interval only.")
+    h3, t3 = build_cooperation_table(arms, args.n_boot)
+    note3 = (games + "Exploratory and post hoc: these contrasts on cooperation were added after the other results were "
+             "seen, so they are not part of the pre-specified family of eight tests and the p-values are not "
+             "corrected for multiple comparisons. Cooperation is the change in the share of CHEAP choices, rounds 4–6 "
+             "minus rounds 1–3. All three agents includes the replacement, whose choice is forced in scenarios 3 and "
+             "4, so that column partly reflects the forced choice; J and M are the two agents who were not replaced. "
+             "A difference is the first scenario minus the second; positive means more cooperation in the first. "
+             "Difference in means with 95% percentile bootstrap interval and two-sided permutation p (10,000 shuffles). "
+             "Scenario 2 is the baseline, but in about half of its games an agent defected before the swap and cooperation "
+             "recovered afterwards, which raises its cooperation change and inflates the contrasts against it; the "
+             "version restricted to games with no early defection is in the appendix.")
     title_suffix = " (games with no defection before the swap)" if args.stable_only else ""
     with open(os.path.join(args.out_dir, f"tables{suffix}.html"), "w", encoding="utf-8") as f:
         f.write("<!doctype html><meta charset='utf-8'><title>Swap results tables</title>"
                 + html_table("Table 1. Results by scenario" + title_suffix, h1, t1, note1)
-                + html_table("Table 2. Pre-specified contrasts" + title_suffix, h2, t2, note2))
+                + html_table("Table 2. Pre-specified contrasts" + title_suffix, h2, t2, note2)
+                + html_table("Table 3. Exploratory contrasts on cooperation" + title_suffix, h3, t3, note3))
     write_docx(os.path.join(args.out_dir, f"tables{suffix}.docx"),
                [("Table 1. Results by scenario" + title_suffix, h1, t1, note1),
-                ("Table 2. Pre-specified contrasts" + title_suffix, h2, t2, note2)])
+                ("Table 2. Pre-specified contrasts" + title_suffix, h2, t2, note2),
+                ("Table 3. Exploratory contrasts on cooperation" + title_suffix, h3, t3, note3,
+                 [1.2, 1.7, 2.1, 0.6, 2.1, 0.6])])
     write_csv(os.path.join(args.out_dir, f"table1_results{suffix}.csv"), h1, t1)
     write_csv(os.path.join(args.out_dir, f"table2_contrasts{suffix}.csv"), h2, t2)
+    write_csv(os.path.join(args.out_dir, f"table3_cooperation{suffix}.csv"), h3, t3)
     plot_figure(arms, os.path.join(args.out_dir, f"fig_time_to_detection{suffix}.png"),
                 os.path.join(args.out_dir, f"fig_time_to_detection{suffix}.pdf"), args.n_boot)
     plot_curve(arms, os.path.join(args.out_dir, f"fig_detection_curve{suffix}.png"),
