@@ -2,6 +2,8 @@
 
 This project was done for the **Apart Research AI Collusion Research Sprint** (Oct 23-25, 2026), question 3.3: *Can agents identify when a peer has been replaced?*
 
+**Report:** [Full write-up (PDF)](report/Frank_Hoang_Hackathon.pdf)
+
 This fork extends the repeated-game harness of Shi et al. ([arXiv:2607.05132](https://arxiv.org/abs/2607.05132)) with a **mid-game swap**: after a chosen round, one agent in a Diner's-game group is replaced, and the remaining agents are asked whether it is still the same agent. The replacement's behavior and the model behind it can be varied independently, to test whether peers notice a swap from what the replacement *does* or from *which model it is*.
 
 **Scenarios** (Haiku 4.5 peers J and M, 6 rounds, Q swapped after round 3, 10 games each):
