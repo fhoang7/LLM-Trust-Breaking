@@ -53,9 +53,10 @@ def ci_text(ci, digits=2):
 
 
 def count_text(c):
+    """Proportion of games with its exact interval, all as decimals (same format as the other columns)."""
     if c is None:
         return "n/a"
-    return f"{c['k']}/{c['n']} [{c['lo']:.0%}, {c['hi']:.0%}]"
+    return f"{c['rate']:.2f} [{c['lo']:.2f}, {c['hi']:.2f}]"
 
 
 def diff_text(ci, p, bold=False):
@@ -82,8 +83,8 @@ def load(path, stable_only):
 
 
 def build_tables(arms, n_boot):
-    header1 = ["Scenario", "Final guess (1–10)", "Trust change", "Detected by the end",
-               "False positive (placebo)", "Group cooperation change ‡"]
+    header1 = ["Scenario", "Final guess (1–10)", "Trust change", "Proportion detected by the end",
+               "False-positive proportion (placebo)", "Group cooperation change ‡"]
     table1 = []
     for label, a in arms.items():
         rows = a["rows"]
@@ -346,8 +347,8 @@ def main():
     (h1, t1), (h2, t2) = build_tables(arms, args.n_boot)
     games = ("Games per scenario: " + ", ".join(f"{k}: {v}" for k, v in sorted(sizes.items())) + ". ") \
         if args.stable_only else "10 games per scenario. "
-    note1 = (games + "Mean over games with 95% BCa bootstrap intervals in brackets (10,000 resamples); counts are games "
-             "with a guess score above 5.5, with exact (Clopper–Pearson) 95% intervals. Final guess: 1 = certain the "
+    note1 = (games + "Mean over games with 95% BCa bootstrap intervals in brackets (10,000 resamples); proportions are the "
+             "share of games with a guess score above 5.5, with exact (Clopper–Pearson) 95% intervals. Final guess: 1 = certain the "
              "agent is the same, 10 = certain it was replaced. Trust change: peers' trust in Q, rounds 4–6 minus "
              "rounds 1–3. False positive: share flagged at the probe asked before the swap. ‡ Exploratory: "
              "change in the share of CHEAP choices among all three agents, rounds 4–6 minus rounds 1–3.")
