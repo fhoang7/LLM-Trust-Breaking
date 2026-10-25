@@ -9,7 +9,7 @@ keyword coder as a cross-check, and reports per arm, over post-swap reasons only
   - the share of reasons citing behaviour change / style change / continuity,
   - among "changed" verdicts, the share citing behaviour vs style,
   - how often the two coders agree.
-Shares are computed per trial first and summarised with a 95% BCa bootstrap CI over trials.
+Shares are computed per trial first and summarised with a 95% percentile bootstrap CI over trials.
 Results are cached next to the outputs, so re-running does not call the API again.
 EXPLORATORY: these are descriptive and outside the pre-specified Bonferroni family.
 """

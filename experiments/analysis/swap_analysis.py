@@ -1,4 +1,4 @@
-"""Summarise swap-experiment arms: per-arm means with 95% BCa CIs, the pre-specified contrasts,
+"""Summarise swap-experiment arms: per-arm means with 95% percentile CIs, the pre-specified contrasts,
 the detection curve and time to detection.
 
 Usage:
@@ -99,7 +99,7 @@ def main():
         print(f"  {label} ({ARM_NAMES.get(label, '?')}): {len(a['rows'])} trials{' (stable-only)' if args.stable_only else ''}; "
               f"{a['volatile']} with a defection in rounds 1-{swap_at} (before any swap){extra}")
 
-    print("\nPer-arm means with 95% BCa bootstrap CI (trial = unit)")
+    print("\nPer-arm means with 95% percentile bootstrap CI (trial = unit)")
     for metric in PRIMARY + SECONDARY + ("placebo_score",):
         tag = "  (primary)" if metric in PRIMARY else "  (placebo: guess after the last pre-swap round)" if metric == "placebo_score" else ""
         print(f"\n  {metric}{tag}")
@@ -143,7 +143,7 @@ def main():
 
     n_contrasts = sum(1 for hi, lo in CONTRASTS if hi in arms and lo in arms)
     family = max(1, n_contrasts * len(PRIMARY))
-    print(f"\nPre-specified contrasts (difference in means, 95% BCa CI, permutation p; Bonferroni family = {family})")
+    print(f"\nPre-specified contrasts (difference in means, 95% percentile CI, permutation p; Bonferroni family = {family})")
     for hi, lo in CONTRASTS:
         if hi not in arms or lo not in arms:
             continue

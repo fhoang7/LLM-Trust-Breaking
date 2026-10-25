@@ -5,10 +5,8 @@ anything is resampled, because the peers see the same game.
 """
 import random
 from math import comb
-from statistics import NormalDist
 from typing import Any, Dict, List, Optional, Sequence
 
-_ND = NormalDist()
 
 
 def _clean(values: Sequence[Optional[float]]) -> List[float]:
@@ -92,32 +90,18 @@ def trial_metrics(rounds: List[Dict[str, Any]], swap_agent: str, swap_at: int,
 
 
 # ---------------------------------------------------------------------------
-# Bootstrap (BCa) and permutation test
+# Percentile bootstrap and permutation test
 # ---------------------------------------------------------------------------
 
-def _bca(boot: List[float], theta: float, jack: List[float], alpha: float) -> tuple:
-    """Bias-corrected and accelerated percentile interval; falls back to plain percentiles."""
+def _percentile_interval(boot: List[float], alpha: float) -> tuple:
+    """Plain percentile interval: the alpha/2 and 1 - alpha/2 percentiles of the bootstrap statistics."""
     boot = sorted(boot)
     n = len(boot)
 
     def pick(p: float) -> float:
         return boot[min(n - 1, max(0, int(p * n)))]
 
-    below = sum(b < theta for b in boot) / n
-    below = min(max(below, 1 / (n + 1)), 1 - 1 / (n + 1))
-    z0 = _ND.inv_cdf(below)
-    jm = _mean(jack)
-    den = 6 * (sum((jm - j) ** 2 for j in jack)) ** 1.5
-    acc = sum((jm - j) ** 3 for j in jack) / den if den > 1e-12 else 0.0
-
-    def adjusted(q: float) -> float:
-        z = _ND.inv_cdf(q)
-        denom = 1 - acc * (z0 + z)
-        if denom <= 1e-9:
-            return q
-        return _ND.cdf(z0 + (z0 + z) / denom)
-
-    return pick(adjusted(alpha / 2)), pick(adjusted(1 - alpha / 2))
+    return pick(alpha / 2), pick(1 - alpha / 2)
 
 
 def bootstrap_ci(values: Sequence[Optional[float]], n_boot: int = 10000, alpha: float = 0.05,
@@ -129,8 +113,7 @@ def bootstrap_ci(values: Sequence[Optional[float]], n_boot: int = 10000, alpha: 
     n = len(xs)
     boot = [_mean([xs[rng.randrange(n)] for _ in range(n)]) for _ in range(n_boot)]
     theta = _mean(xs)
-    jack = [_mean(xs[:i] + xs[i + 1:]) for i in range(n)]
-    lo, hi = _bca(boot, theta, jack, alpha)
+    lo, hi = _percentile_interval(boot, alpha)
     return {"mean": theta, "lo": lo, "hi": hi, "n": n}
 
 
@@ -147,9 +130,7 @@ def diff_ci(a: Sequence[Optional[float]], b: Sequence[Optional[float]], n_boot: 
         for _ in range(n_boot)
     ]
     theta = _mean(xa) - _mean(xb)
-    jack = ([_mean(xa[:i] + xa[i + 1:]) - _mean(xb) for i in range(na)]
-            + [_mean(xa) - _mean(xb[:i] + xb[i + 1:]) for i in range(nb)])
-    lo, hi = _bca(boot, theta, jack, alpha)
+    lo, hi = _percentile_interval(boot, alpha)
     return {"diff": theta, "lo": lo, "hi": hi, "n_a": na, "n_b": nb}
 
 
@@ -214,11 +195,7 @@ def interaction_ci(e: Sequence[Optional[float]], d: Sequence[Optional[float]],
     boot = [stat([[g[rng.randrange(len(g))] for _ in range(len(g))] for g in groups])
             for _ in range(n_boot)]
     theta = stat(groups)
-    jack = []
-    for gi, g in enumerate(groups):
-        for i in range(len(g)):
-            jack.append(stat([g2[:i] + g2[i + 1:] if gj == gi else g2 for gj, g2 in enumerate(groups)]))
-    lo, hi = _bca(boot, theta, jack, alpha)
+    lo, hi = _percentile_interval(boot, alpha)
     return {"interaction": theta, "lo": lo, "hi": hi, "n": sizes}
 
 

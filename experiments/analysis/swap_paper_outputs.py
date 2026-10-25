@@ -5,7 +5,7 @@ Usage:
       [--stable-only] [--out-dir outputs/paper]
 
 Writes, with scenarios numbered 1-5 (a-e in the code):
-  table1_results.html / .csv     one row per scenario: means with 95% BCa CIs, binary detection with
+  table1_results.html / .csv     one row per scenario: means with 95% percentile CIs, binary detection with
                                  exact CIs, false-positive rate, group cooperation change
   table2_contrasts.html / .csv   the pre-specified contrasts and the interaction
   fig_time_to_detection.png/.pdf mean guess score by round, and cumulative share of games detected
@@ -387,7 +387,7 @@ def main():
     (h1, t1), (h2, t2) = build_tables(arms, args.n_boot)
     games = ("Games per scenario: " + ", ".join(f"{k}: {v}" for k, v in sorted(sizes.items())) + ". ") \
         if args.stable_only else "10 games per scenario. "
-    note1 = (games + "Mean over games with 95% BCa bootstrap intervals in brackets (10,000 resamples). "
+    note1 = (games + "Mean over games with 95% percentile bootstrap intervals in brackets (10,000 resamples). "
              "Final guess: the peers' guess after round 6, from 1 (certain the agent is the same) to 10 (certain it was "
              "replaced). Trust change: peers' trust in Q, rounds 4–6 minus rounds 1–3. Bold: the scenario differs "
              "significantly on that measure from the scenario it is compared with (scenario 2 for scenarios 3–5, "
@@ -400,7 +400,7 @@ def main():
              "swap. In scenario 1 nothing is replaced, so its detected proportion is also a false positive. "
              "Proportions carry exact (Clopper–Pearson) 95% intervals. ‡ Exploratory and untested: change in the "
              "share of CHEAP choices among all three agents, rounds 4–6 minus rounds 1–3.")
-    note2 = (games + "Difference in means with 95% BCa bootstrap interval and two-sided permutation p (10,000 "
+    note2 = (games + "Difference in means with 95% percentile bootstrap interval and two-sided permutation p (10,000 "
              "shuffles). Significant: p below 0.05/8 = 0.00625 (Bonferroni correction over 4 contrasts × 2 measures); "
              "significant results are in bold. The interaction is reported with an interval only. Scenario 2 is the "
              "baseline for the swap contrasts; scenario 1 is the baseline for scenario 2.")

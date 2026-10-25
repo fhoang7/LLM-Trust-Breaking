@@ -27,7 +27,7 @@ Q's identity (or the lack of it) is the only thing that differs in d; the behavi
 
 ## Primary results (all 10 games per arm)
 
-Mean over games (the game is the unit; peers, draws and rounds are averaged within a game first). 95% BCa bootstrap CI, 10,000 resamples.
+Mean over games (the game is the unit; peers, draws and rounds are averaged within a game first). 95% percentile bootstrap CI, 10,000 resamples.
 
 | Arm | Final guess score (1-10) | Trust in Q, rounds 4-6 minus 1-3 | Placebo guess (after round 3) |
 |---|---|---|---|
@@ -37,7 +37,7 @@ Mean over games (the game is the unit; peers, draws and rounds are averaged with
 | d | 3.65 [1.98, 6.02] | -0.10 [-1.00, 0.30] | 3.03 [2.02, 5.22] |
 | e | 9.23 [9.07, 9.50] | -2.73 [-3.32, -2.17] | 3.77 [2.30, 5.93] |
 
-Pre-specified contrasts (difference in means, BCa CI, two-sided permutation p). The Bonferroni family is 4 contrasts x 2 primary measures = 8 tests, so the threshold is p < 0.00625.
+Pre-specified contrasts (difference in means, percentile CI, two-sided permutation p). The Bonferroni family is 4 contrasts x 2 primary measures = 8 tests, so the threshold is p < 0.00625.
 
 | Contrast | Final guess | Trust change |
 |---|---|---|
@@ -105,7 +105,7 @@ Peers also never raise the idea unprompted. In 0 of 60 post-swap incumbent trust
 
 ## Group-wide cooperation (exploratory)
 
-Does the group as a whole cooperate less after the replacement defects? Measured as the share of final choices that were CHEAP among all three agents, rounds 4-6 minus rounds 1-3, per game (95% BCa CI over games). Also split into the part due to the swapped agent's own choices and the part due to J and M. Script: `experiments/analysis/swap_group_cooperation.py`.
+Does the group as a whole cooperate less after the replacement defects? Measured as the share of final choices that were CHEAP among all three agents, rounds 4-6 minus rounds 1-3, per game (95% percentile CI over games). Also split into the part due to the swapped agent's own choices and the part due to J and M. Script: `experiments/analysis/swap_group_cooperation.py`.
 
 | Arm | Group before | Group after | Group change | From the swapped agent | From J and M |
 |---|---|---|---|---|---|
@@ -132,7 +132,7 @@ Reading it:
 
 ## Limitations
 
-- **Small n.** 10 games per arm; stable subsets are 5-8. At n=10 the nominal 95% BCa interval covered about 87% in a simulation with skewed data, so the intervals here are somewhat too narrow. A 30-point difference in a binary rate has only about 30% power at n=10.
+- **Small n.** 10 games per arm; stable subsets are 5-8. At n=10 the nominal 95% percentile interval covered about 86% in a simulation with skewed data, so the intervals here are somewhat too narrow. A 30-point difference in a binary rate has only about 30% power at n=10.
 - **Where intervals collapse to a point** (for example trust in c-stable, -4.00 [-4.00, -4.00]), every game gave the same value; the interval reflects that, not certainty.
 - **One configuration.** Haiku peers, one game type, one swap round (after round 3), one replacement model, 3 agents. DeepSeek is a different provider, not necessarily the best model to blend in.
 - **The guess question itself may prime suspicion.** The placebo rounds (false positives of 1-4 in 10) show the effect is small but not zero.

@@ -6,7 +6,7 @@ Usage:
 For each game: the share of final choices that were CHEAP among all agents (group) and among the
 agents who were not replaced (incumbents), rounds after the swap minus rounds up to it. Also reports
 how much of the group change comes from the swapped agent itself, since under a forced choice that
-part is mechanical. Intervals are 95% BCa bootstrap over games; contrasts use a permutation p-value.
+part is mechanical. Intervals are 95% percentile bootstrap over games; contrasts use a permutation p-value.
 """
 import argparse
 import json
@@ -77,7 +77,7 @@ def main():
             raise SystemExit(f"{path}: no metadata.swap")
         arms[label] = game_rows(data["rounds"], swap["agent"], swap["swap_at"])
 
-    print("Share of final choices that were CHEAP, mean over games [95% BCa CI]")
+    print("Share of final choices that were CHEAP, mean over games [95% percentile CI]")
     for label, rs in arms.items():
         print(f"  arm {label}: group before {fmt([r['group_pre'] for r in rs])}, after {fmt([r['group_post'] for r in rs])}")
         print(f"         group change {fmt([r['group_delta'] for r in rs])}; "
@@ -85,7 +85,7 @@ def main():
         print(f"         group change from the swapped agent {fmt([r['from_swapped'] for r in rs])}, "
               f"from the incumbents {fmt([r['from_incumbents'] for r in rs])}")
 
-    print("\nContrasts on the group change (difference in means, BCa CI, permutation p)")
+    print("\nContrasts on the group change (difference in means, percentile CI, permutation p)")
     for hi, lo in CONTRASTS:
         if hi in arms and lo in arms:
             a, b = [r["group_delta"] for r in arms[hi]], [r["group_delta"] for r in arms[lo]]

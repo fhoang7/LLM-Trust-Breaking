@@ -227,6 +227,23 @@ class InteractionTests(unittest.TestCase):
         self.assertIsNone(interaction_ci([1.0], [1.0, 2.0], [1.0, 2.0], [1.0, 2.0]))
 
 
+class PercentileIntervalTests(unittest.TestCase):
+    SKEWED = [1.0, 1.0, 1.0, 1.0, 1.0, 1.2, 1.5, 2.0, 6.0, 9.0]
+
+    def test_interval_is_the_plain_percentile_of_the_bootstrap_means(self):
+        import random
+        xs = self.SKEWED
+        rng = random.Random(0)
+        boot = sorted(sum(xs[rng.randrange(len(xs))] for _ in xs) / len(xs) for _ in range(2000))
+        ci = bootstrap_ci(xs, n_boot=2000)
+        self.assertAlmostEqual(ci["lo"], boot[int(0.025 * 2000)])
+        self.assertAlmostEqual(ci["hi"], boot[int(0.975 * 2000)])
+
+    def test_identical_values_give_a_point_interval(self):
+        ci = bootstrap_ci([3.0] * 6, n_boot=500)
+        self.assertEqual((ci["lo"], ci["mean"], ci["hi"]), (3.0, 3.0, 3.0))
+
+
 class PermutationTests(unittest.TestCase):
     def test_separated_groups_give_small_p(self):
         a = [8, 9, 9, 10, 8, 9, 10, 9, 8, 9]
