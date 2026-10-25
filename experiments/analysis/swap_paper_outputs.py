@@ -35,6 +35,14 @@ SCENARIO = {"a": (1, "No-op baseline"), "b": (2, "Fresh Haiku"), "c": (3, "Behav
 CONTRASTS = (("b", "a", "2 − 1  (swap alone)"), ("c", "b", "3 − 2  (behaviour only)"),
              ("d", "b", "4 − 2  (model only)"), ("e", "b", "5 − 2  (both)"))
 BONFERRONI_FAMILY = 8
+CONTRAST_LABELS = {
+    ("b", "a"): ("Scenario 2 vs 1", "Fresh Haiku vs the same Haiku (no-op)", "The swap itself"),
+    ("c", "b"): ("Scenario 3 vs 2", "Forced defection vs normal behaviour (both fresh Haiku)", "A behaviour change"),
+    ("d", "b"): ("Scenario 4 vs 2", "DeepSeek forced to cooperate vs fresh Haiku", "A model change"),
+    ("e", "b"): ("Scenario 5 vs 2", "DeepSeek free to choose vs fresh Haiku", "Both changes"),
+}
+INTERACTION_LABEL = ("(5 vs 4) − (3 vs 2)", "Does the behaviour effect depend on the model?",
+                     "Interaction (zero: the effects add up)")
 # Reference palette, categorical slots 1-5 in their documented order (light surface).
 COLORS = {"a": "#2a78d6", "b": "#eb6834", "c": "#1baf7a", "d": "#eda100", "e": "#e87ba4"}
 MARKERS = {"a": "o", "b": "s", "c": "^", "d": "D", "e": "v"}
@@ -131,13 +139,13 @@ def build_tables(arms, n_boot):
                        count_text(ds["placebo"]), count_text(ds["final"]),
                        ci_text(bootstrap_ci([c["group_delta"] for c in a["coop"]], n_boot=n_boot))])
 
-    header2 = ["Contrast", "Final guess: difference [95% CI]", "p", "Significant?",
-               "Trust change: difference [95% CI]", "p", "Significant?"]
+    header2 = ["Comparison", "What differs", "Isolates", "Confidence: difference [95% CI]", "p",
+               "Significant?", "Trust change: difference [95% CI]", "p", "Significant?"]
     table2 = []
     for hi, lo, text in CONTRASTS:
         if (hi, lo) not in res:
             continue
-        cells = [text]
+        cells = list(CONTRAST_LABELS[(hi, lo)])
         for metric in ("guess_score", "trust_delta"):
             r = res[(hi, lo)][metric]
             ci = r["ci"]
@@ -146,7 +154,7 @@ def build_tables(arms, n_boot):
             cells += [bold(diff, r["sig"]), bold(p_text(r["p"]), r["sig"]), bold("Yes", True) if r["sig"] else "No"]
         table2.append(cells)
     if all(k in arms for k in "bcde"):
-        cells = ["Interaction (5 − 4) − (3 − 2)"]
+        cells = list(INTERACTION_LABEL)
         for metric in ("guess_score", "trust_delta"):
             ci = interaction_ci(*[[r[metric] for r in arms[k]["rows"]] for k in "edcb"], n_boot=n_boot)
             cells += ["n/a" if ci is None else
@@ -192,7 +200,11 @@ def write_docx(path, tables):
         setattr(section, side, Inches(0.7))
     base = doc.styles["Normal"]
     base.font.name = "Arial"
-    base.font.size = Pt(9)
+    base.font.size = Pt(8.5)
+
+    widths_by_cols = {9: [1.0, 1.9, 1.3, 1.35, 0.5, 0.75, 1.35, 0.5, 0.75],      # contrasts
+                      6: [1.6, 1.25, 1.25, 1.85, 1.85, 1.6],                      # results by scenario
+                      4: [3.2, 0.7, 2.7, 2.9]}                                    # default behaviour
 
     for title, header, rows, note in tables:
         heading = doc.add_paragraph()
@@ -210,6 +222,12 @@ def write_docx(path, tables):
                 is_bold = text.startswith("**") and text.endswith("**")
                 cell.text = ""
                 cell.paragraphs[0].add_run(text[2:-2] if is_bold else text).bold = is_bold
+        widths = widths_by_cols.get(len(header))
+        if widths:
+            table.autofit = False
+            for row in table.rows:
+                for cell, width in zip(row.cells, widths):
+                    cell.width = Inches(width)
         caption = doc.add_paragraph()
         cap_run = caption.add_run(note)
         cap_run.font.size = Pt(8.5)
@@ -447,10 +465,14 @@ def main():
              "swap. In scenario 1 nothing is replaced, so its detected proportion is also a false positive. "
              "Proportions carry exact (Clopper–Pearson) 95% intervals. ‡ Exploratory and untested: change in the "
              "share of CHEAP choices among all three agents, rounds 4–6 minus rounds 1–3.")
-    note2 = (games + "Difference in means with 95% percentile bootstrap interval and two-sided permutation p (10,000 "
-             "shuffles). Significant: p below 0.05/8 = 0.00625 (Bonferroni correction over 4 contrasts × 2 measures); "
-             "significant results are in bold. The interaction is reported with an interval only. Scenario 2 is the "
-             "baseline for the swap contrasts; scenario 1 is the baseline for scenario 2.")
+    note2 = (games + "Each row compares two scenarios on the confidence that Q was swapped (final guess, 1–10) "
+             "and on the change in trust. A difference is the first scenario minus the second; positive means higher "
+             "in the first. Scenario 2, a fresh Haiku with no forced behaviour, is the baseline for the swap "
+             "contrasts (scenario 1 is the baseline for scenario 2). Difference in means with 95% percentile "
+             "bootstrap interval and two-sided permutation p (10,000 shuffles). Significant: p below 0.05/8 = 0.00625 "
+             "(Bonferroni correction over 4 contrasts × 2 measures); significant results are in bold. The interaction "
+             "row asks whether the behaviour effect depends on the model; zero means the two effects simply add up. "
+             "It is reported with an interval only.")
     title_suffix = " (games with no defection before the swap)" if args.stable_only else ""
     with open(os.path.join(args.out_dir, f"tables{suffix}.html"), "w", encoding="utf-8") as f:
         f.write("<!doctype html><meta charset='utf-8'><title>Swap results tables</title>"
