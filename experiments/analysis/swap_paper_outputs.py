@@ -223,8 +223,8 @@ def plot_curve(arms, path_png, path_pdf, n_boot):
         means = [c["mean"] for _, c in pts]
         ax.errorbar(xs, means, yerr=[[m - c["lo"] for m, (_, c) in zip(means, pts)],
                                      [c["hi"] - m for m, (_, c) in zip(means, pts)]],
-                    fmt="none", ecolor=COLORS[label], elinewidth=1.2, capsize=2.5, capthick=1.2,
-                    alpha=0.5, zorder=2)
+                    fmt="none", ecolor=COLORS[label], elinewidth=1.6, capsize=3.5, capthick=1.6,
+                    alpha=0.85, zorder=2)
         ax.plot(xs, means, color=COLORS[label], linewidth=1.9, marker=MARKERS[label], markersize=6.5,
                 markeredgecolor="white", markeredgewidth=0.9, label=f"{SCENARIO[label][0]}  {SCENARIO[label][1]}",
                 zorder=3)
