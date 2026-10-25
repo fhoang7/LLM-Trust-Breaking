@@ -8,6 +8,7 @@ Writes, with scenarios numbered 1-5 (a-e in the code):
   table1_results.html / .csv     one row per scenario: means with 95% percentile CIs, binary detection with
                                  exact CIs, false-positive rate, group cooperation change
   table2_contrasts.html / .csv   the pre-specified contrasts and the interaction
+  tables.docx                    both tables as editable Word tables (opens in Google Docs); needs python-docx
   fig_time_to_detection.png/.pdf mean guess score by round, and cumulative share of games detected
 
 The HTML opens in a browser; select the table and paste into Google Docs to keep it as a table.
@@ -169,6 +170,51 @@ def html_table(title, header, rows, note):
             f"<table style='border-collapse:collapse;font-family:Arial,sans-serif;font-size:11pt'>"
             f"<tr>{th}</tr>{body}</table>"
             f"<p style='font-family:Arial,sans-serif;font-size:9pt;max-width:900px'>{html.escape(note)}</p>")
+
+
+def write_docx(path, tables):
+    """Both tables as real Word tables (editable in Word and Google Docs), bold preserved.
+
+    tables: list of (title, header, rows, note); a cell wrapped in ** ** is written in bold.
+    """
+    try:
+        from docx import Document
+        from docx.enum.section import WD_ORIENT
+        from docx.shared import Inches, Pt
+    except ImportError:
+        print("  (skipping tables.docx: pip install python-docx to enable it)")
+        return
+    doc = Document()
+    section = doc.sections[0]
+    section.orientation = WD_ORIENT.LANDSCAPE
+    section.page_width, section.page_height = section.page_height, section.page_width
+    for side in ("left_margin", "right_margin", "top_margin", "bottom_margin"):
+        setattr(section, side, Inches(0.7))
+    base = doc.styles["Normal"]
+    base.font.name = "Arial"
+    base.font.size = Pt(9)
+
+    for title, header, rows, note in tables:
+        heading = doc.add_paragraph()
+        run = heading.add_run(title)
+        run.bold = True
+        run.font.size = Pt(11)
+        table = doc.add_table(rows=1, cols=len(header))
+        table.style = "Table Grid"
+        for cell, text in zip(table.rows[0].cells, header):
+            cell.text = ""
+            cell.paragraphs[0].add_run(text).bold = True
+        for row in rows:
+            cells = table.add_row().cells
+            for cell, text in zip(cells, row):
+                is_bold = text.startswith("**") and text.endswith("**")
+                cell.text = ""
+                cell.paragraphs[0].add_run(text[2:-2] if is_bold else text).bold = is_bold
+        caption = doc.add_paragraph()
+        cap_run = caption.add_run(note)
+        cap_run.font.size = Pt(8.5)
+        doc.add_paragraph()
+    doc.save(path)
 
 
 def write_csv(path, header, rows):
@@ -410,6 +456,9 @@ def main():
         f.write("<!doctype html><meta charset='utf-8'><title>Swap results tables</title>"
                 + html_table("Table 1. Results by scenario" + title_suffix, h1, t1, note1)
                 + html_table("Table 2. Pre-specified contrasts" + title_suffix, h2, t2, note2))
+    write_docx(os.path.join(args.out_dir, f"tables{suffix}.docx"),
+               [("Table 1. Results by scenario" + title_suffix, h1, t1, note1),
+                ("Table 2. Pre-specified contrasts" + title_suffix, h2, t2, note2)])
     write_csv(os.path.join(args.out_dir, f"table1_results{suffix}.csv"), h1, t1)
     write_csv(os.path.join(args.out_dir, f"table2_contrasts{suffix}.csv"), h2, t2)
     plot_figure(arms, os.path.join(args.out_dir, f"fig_time_to_detection{suffix}.png"),
