@@ -83,8 +83,9 @@ def load(path, stable_only):
 
 
 def build_tables(arms, n_boot):
-    header1 = ["Scenario", "Final guess (1–10)", "Trust change", "Proportion detected by the end",
-               "False-positive proportion (placebo)", "Group cooperation change ‡"]
+    header1 = ["Scenario", "Final guess (1–10)", "Trust change",
+               "False-positive proportion (probe after round 3, before the swap)",
+               "Proportion detected (probe after round 6)", "Group cooperation change ‡"]
     table1 = []
     for label, a in arms.items():
         rows = a["rows"]
@@ -93,7 +94,7 @@ def build_tables(arms, n_boot):
         table1.append([f"{num_}  {name}",
                        ci_text(bootstrap_ci([r["guess_score"] for r in rows], n_boot=n_boot)),
                        ci_text(bootstrap_ci([r["trust_delta"] for r in rows], n_boot=n_boot)),
-                       count_text(ds["final"]), count_text(ds["placebo"]),
+                       count_text(ds["placebo"]), count_text(ds["final"]),
                        ci_text(bootstrap_ci([c["group_delta"] for c in a["coop"]], n_boot=n_boot))])
 
     header2 = ["Contrast", "Final guess (difference)", "Trust change (difference)"]
@@ -319,8 +320,8 @@ def plot_grid(arms, path_png, path_pdf, n_boot):
                  fontsize=10.5, color=INK2)
     for i, t in enumerate(row_titles):
         fig.text(0.015, 0.74 - i * 0.345, t, rotation=90, va="center", fontsize=10.5, color=INK2)
-    fig.supxlabel("Probe asked after round (3 = before the swap)", fontsize=10, y=0.06, color=INK)
-    fig.supylabel("Peers' guess that Q was replaced (1\u201310)", fontsize=10, x=0.055, color=INK)
+    fig.supxlabel("Diner\u2019s Game Round", fontsize=10, y=0.06, color=INK)
+    fig.supylabel("Peers\u2019 confidence that Q was swapped (1\u201310)", fontsize=10, x=0.055, color=INK)
     fig.legend(*axes[0][0].get_legend_handles_labels(), loc="lower center", frameon=False, fontsize=9,
                handlelength=2.2, bbox_to_anchor=(0.5, 0.0))
     fig.subplots_adjust(top=0.92, bottom=0.14, left=0.14, right=0.98)
@@ -347,11 +348,16 @@ def main():
     (h1, t1), (h2, t2) = build_tables(arms, args.n_boot)
     games = ("Games per scenario: " + ", ".join(f"{k}: {v}" for k, v in sorted(sizes.items())) + ". ") \
         if args.stable_only else "10 games per scenario. "
-    note1 = (games + "Mean over games with 95% BCa bootstrap intervals in brackets (10,000 resamples); proportions are the "
-             "share of games with a guess score above 5.5, with exact (Clopper–Pearson) 95% intervals. Final guess: 1 = certain the "
-             "agent is the same, 10 = certain it was replaced. Trust change: peers' trust in Q, rounds 4–6 minus "
-             "rounds 1–3. False positive: share flagged at the probe asked before the swap. ‡ Exploratory: "
-             "change in the share of CHEAP choices among all three agents, rounds 4–6 minus rounds 1–3.")
+    note1 = (games + "Mean over games with 95% BCa bootstrap intervals in brackets (10,000 resamples). "
+             "Final guess: the peers' guess after round 6, from 1 (certain the agent is the same) to 10 (certain it was "
+             "replaced). Trust change: peers' trust in Q, rounds 4–6 minus rounds 1–3. A game counts as "
+             "flagged when the guess score is above 5.5, i.e. the peers say the agent changed. "
+             "False-positive proportion: share of games flagged by the probe asked after round 3, before the swap "
+             "takes effect, when nothing has changed; it is the baseline for the next column. "
+             "Proportion detected: share of games flagged by the probe asked after round 6, three rounds after the "
+             "swap. In scenario 1 nothing is replaced, so its detected proportion is also a false positive. "
+             "Proportions carry exact (Clopper–Pearson) 95% intervals. ‡ Exploratory: change in the share "
+             "of CHEAP choices among all three agents, rounds 4–6 minus rounds 1–3.")
     note2 = (games + "Difference in means with 95% BCa bootstrap interval and two-sided permutation p. † p below "
              f"0.05/{BONFERRONI_FAMILY} (Bonferroni over 4 contrasts × 2 measures). The interaction is reported with "
              "an interval only. Scenario 2 is the baseline for the swap contrasts.")
