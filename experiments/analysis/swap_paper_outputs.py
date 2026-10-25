@@ -83,7 +83,39 @@ def load(path, stable_only):
     return {"rows": rows, "coop": coop, "swap_at": swap["swap_at"], "n_rounds": len(data["rounds"])}
 
 
+def contrast_results(arms, n_boot):
+    """(hi, lo) -> metric -> {ci, p, sig} for the pre-specified contrasts and the two primary measures."""
+    threshold = 0.05 / BONFERRONI_FAMILY
+    out = {}
+    for hi, lo, _ in CONTRASTS:
+        if hi not in arms or lo not in arms:
+            continue
+        out[(hi, lo)] = {}
+        for metric in ("guess_score", "trust_delta"):
+            x = [r[metric] for r in arms[hi]["rows"]]
+            y = [r[metric] for r in arms[lo]["rows"]]
+            ci = diff_ci(x, y, n_boot=n_boot)
+            p = permutation_pvalue(x, y, n_perm=n_boot)
+            out[(hi, lo)][metric] = {"ci": ci, "p": p, "sig": p is not None and p < threshold}
+    return out
+
+
+def bold(text, on):
+    return f"**{text}**" if on else text
+
+
+def p_text(p):
+    return "n/a" if p is None else ("<0.001" if p < 0.001 else f"{p:.3f}")
+
+
 def build_tables(arms, n_boot):
+    res = contrast_results(arms, n_boot)
+    compared_with = {hi: lo for hi, lo, _ in CONTRASTS}      # the scenario each one is tested against
+
+    def sig(label, metric):
+        key = (label, compared_with.get(label))
+        return key in res and res[key][metric]["sig"]
+
     header1 = ["Scenario", "Final guess (1–10)", "Trust change",
                "False-positive proportion (probe after round 3, before the swap)",
                "Proportion detected (probe after round 6)", "Group cooperation change ‡"]
@@ -93,31 +125,32 @@ def build_tables(arms, n_boot):
         ds = detection_summary(rows)
         num_, name = SCENARIO[label]
         table1.append([f"{num_}  {name}",
-                       ci_text(bootstrap_ci([r["guess_score"] for r in rows], n_boot=n_boot)),
-                       ci_text(bootstrap_ci([r["trust_delta"] for r in rows], n_boot=n_boot)),
+                       bold(ci_text(bootstrap_ci([r["guess_score"] for r in rows], n_boot=n_boot)), sig(label, "guess_score")),
+                       bold(ci_text(bootstrap_ci([r["trust_delta"] for r in rows], n_boot=n_boot)), sig(label, "trust_delta")),
                        count_text(ds["placebo"]), count_text(ds["final"]),
                        ci_text(bootstrap_ci([c["group_delta"] for c in a["coop"]], n_boot=n_boot))])
 
-    header2 = ["Contrast", "Final guess (difference)", "Trust change (difference)"]
+    header2 = ["Contrast", "Final guess: difference [95% CI]", "p", "Significant?",
+               "Trust change: difference [95% CI]", "p", "Significant?"]
     table2 = []
-    threshold = 0.05 / BONFERRONI_FAMILY
     for hi, lo, text in CONTRASTS:
-        if hi not in arms or lo not in arms:
+        if (hi, lo) not in res:
             continue
         cells = [text]
         for metric in ("guess_score", "trust_delta"):
-            x = [r[metric] for r in arms[hi]["rows"]]
-            y = [r[metric] for r in arms[lo]["rows"]]
-            ci = diff_ci(x, y, n_boot=n_boot)
-            p = permutation_pvalue(x, y, n_perm=n_boot)
-            cells.append(diff_text(ci, p, bold=p is not None and p < threshold))
+            r = res[(hi, lo)][metric]
+            ci = r["ci"]
+            diff = "n/a" if ci is None else (f"{num(ci['diff'], 2, True)} [{num(ci['lo'], 2, True)}, "
+                                              f"{num(ci['hi'], 2, True)}]")
+            cells += [bold(diff, r["sig"]), bold(p_text(r["p"]), r["sig"]), bold("Yes", True) if r["sig"] else "No"]
         table2.append(cells)
     if all(k in arms for k in "bcde"):
         cells = ["Interaction (5 − 4) − (3 − 2)"]
         for metric in ("guess_score", "trust_delta"):
             ci = interaction_ci(*[[r[metric] for r in arms[k]["rows"]] for k in "edcb"], n_boot=n_boot)
-            cells.append("n/a" if ci is None else
-                         f"{num(ci['interaction'], 2, True)} [{num(ci['lo'], 2, True)}, {num(ci['hi'], 2, True)}]")
+            cells += ["n/a" if ci is None else
+                      f"{num(ci['interaction'], 2, True)} [{num(ci['lo'], 2, True)}, {num(ci['hi'], 2, True)}]",
+                      "–", "No (interval includes 0)" if ci is not None and ci["lo"] <= 0 <= ci["hi"] else "–"]
         table2.append(cells)
     return (header1, table1), (header2, table2)
 
@@ -356,17 +389,21 @@ def main():
         if args.stable_only else "10 games per scenario. "
     note1 = (games + "Mean over games with 95% BCa bootstrap intervals in brackets (10,000 resamples). "
              "Final guess: the peers' guess after round 6, from 1 (certain the agent is the same) to 10 (certain it was "
-             "replaced). Trust change: peers' trust in Q, rounds 4–6 minus rounds 1–3. A game counts as "
-             "flagged when the guess score is above 5.5, the midpoint between the 'same' answers (1–5) and the 'changed' answers (6–10), i.e. the peers' average guess leans toward 'changed'. "
-             "False-positive proportion: share of games flagged by the probe asked after round 3, before the swap "
-             "takes effect, when nothing has changed; it is the baseline for the next column. "
+             "replaced). Trust change: peers' trust in Q, rounds 4–6 minus rounds 1–3. Bold: the scenario differs "
+             "significantly on that measure from the scenario it is compared with (scenario 2 for scenarios 3–5, "
+             "scenario 1 for scenario 2; Table 2), at p below 0.05/8 after Bonferroni correction. Only the final guess "
+             "and trust change were tested. A game counts as flagged when the guess score is above 5.5, the midpoint "
+             "between the 'same' answers (1–5) and the 'changed' answers (6–10), that is, when the peers' average guess "
+             "leans toward 'changed'. False-positive proportion: share of games flagged by the probe asked after round "
+             "3, before the swap takes effect, when nothing has changed; it is the baseline for the next column. "
              "Proportion detected: share of games flagged by the probe asked after round 6, three rounds after the "
              "swap. In scenario 1 nothing is replaced, so its detected proportion is also a false positive. "
-             "Proportions carry exact (Clopper–Pearson) 95% intervals. ‡ Exploratory: change in the share "
-             "of CHEAP choices among all three agents, rounds 4–6 minus rounds 1–3.")
-    note2 = (games + "Difference in means with 95% BCa bootstrap interval and two-sided permutation p. Bold: p below "
-             f"0.05/{BONFERRONI_FAMILY} (Bonferroni over 4 contrasts × 2 measures). The interaction is reported with "
-             "an interval only. Scenario 2 is the baseline for the swap contrasts.")
+             "Proportions carry exact (Clopper–Pearson) 95% intervals. ‡ Exploratory and untested: change in the "
+             "share of CHEAP choices among all three agents, rounds 4–6 minus rounds 1–3.")
+    note2 = (games + "Difference in means with 95% BCa bootstrap interval and two-sided permutation p (10,000 "
+             "shuffles). Significant: p below 0.05/8 = 0.00625 (Bonferroni correction over 4 contrasts × 2 measures); "
+             "significant results are in bold. The interaction is reported with an interval only. Scenario 2 is the "
+             "baseline for the swap contrasts; scenario 1 is the baseline for scenario 2.")
     title_suffix = " (games with no defection before the swap)" if args.stable_only else ""
     with open(os.path.join(args.out_dir, f"tables{suffix}.html"), "w", encoding="utf-8") as f:
         f.write("<!doctype html><meta charset='utf-8'><title>Swap results tables</title>"
