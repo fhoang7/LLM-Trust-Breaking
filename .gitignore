@@ -60,3 +60,8 @@ tmp/
 
 # Experiment outputs
 outputs/
+
+# Working notes and drafts (kept locally, not tracked)
+SETUP_NOTES.md
+docs/swap_preliminary_report.md
+docs/lit_review_and_baseline_findings.md
