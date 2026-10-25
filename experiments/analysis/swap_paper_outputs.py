@@ -305,12 +305,13 @@ def plot_grid(arms, path_png, path_pdf, n_boot):
                          color=INK, fontweight="bold", pad=5)
             ax.axvline(swap_at + 0.5, color=INK2, linestyle="--", linewidth=1)
             ax.axhline(5.5, color=INK2, linestyle=":", linewidth=1)
+            ax.text(rounds[-1] + 0.6, 5.65, "5.5", color=INK2, fontsize=8, va="bottom", ha="right")
             ax.grid(axis="y", color=GRID, linewidth=0.8)
             ax.set_axisbelow(True)
             for side in ("top", "right"):
                 ax.spines[side].set_visible(False)
             ax.set_ylim(0.8, 10.9)
-            ax.set_xlim(rounds[0] - 0.4, rounds[-1] + 0.4)
+            ax.set_xlim(rounds[0] - 0.4, rounds[-1] + 0.62)
             ax.set_xticks(rounds)
             ax.set_yticks([2, 4, 6, 8, 10])
     axes[0][0].text(swap_at + 0.54, 10.45, "swap", color=INK2, fontsize=8.5, va="bottom")
@@ -351,7 +352,7 @@ def main():
     note1 = (games + "Mean over games with 95% BCa bootstrap intervals in brackets (10,000 resamples). "
              "Final guess: the peers' guess after round 6, from 1 (certain the agent is the same) to 10 (certain it was "
              "replaced). Trust change: peers' trust in Q, rounds 4–6 minus rounds 1–3. A game counts as "
-             "flagged when the guess score is above 5.5, i.e. the peers say the agent changed. "
+             "flagged when the guess score is above 5.5, the midpoint between the 'same' answers (1–5) and the 'changed' answers (6–10), i.e. the peers' average guess leans toward 'changed'. "
              "False-positive proportion: share of games flagged by the probe asked after round 3, before the swap "
              "takes effect, when nothing has changed; it is the baseline for the next column. "
              "Proportion detected: share of games flagged by the probe asked after round 6, three rounds after the "
