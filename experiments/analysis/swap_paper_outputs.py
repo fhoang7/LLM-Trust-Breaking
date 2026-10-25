@@ -64,7 +64,8 @@ def diff_text(ci, p, bold=False):
         return "n/a"
     s = f"{num(ci['diff'], 2, True)} [{num(ci['lo'], 2, True)}, {num(ci['hi'], 2, True)}]"
     ptext = "" if p is None else (", p<0.001" if p < 0.001 else f", p={p:.3f}")
-    return s + ptext + (" \u2020" if bold else "")
+    text = s + ptext
+    return f"**{text}**" if bold else text
 
 
 def load(path, stable_only):
@@ -123,8 +124,13 @@ def build_tables(arms, n_boot):
 
 def html_table(title, header, rows, note):
     th = "".join(f"<th style='border:1px solid #999;padding:4px 8px;text-align:left;background:#f1f0ec'>{html.escape(h)}</th>" for h in header)
-    body = "".join("<tr>" + "".join(
-        f"<td style='border:1px solid #999;padding:4px 8px'>{html.escape(c)}</td>" for c in r) + "</tr>" for r in rows)
+    def cell(c):
+        bold = c.startswith("**") and c.endswith("**")
+        text = html.escape(c[2:-2] if bold else c)
+        return (f"<td style='border:1px solid #999;padding:4px 8px'>"
+                + (f"<b>{text}</b>" if bold else text) + "</td>")
+
+    body = "".join("<tr>" + "".join(cell(c) for c in r) + "</tr>" for r in rows)
     return (f"<h3 style='font-family:Arial,sans-serif'>{html.escape(title)}</h3>"
             f"<table style='border-collapse:collapse;font-family:Arial,sans-serif;font-size:11pt'>"
             f"<tr>{th}</tr>{body}</table>"
@@ -135,7 +141,7 @@ def write_csv(path, header, rows):
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f)
         w.writerow(header)
-        w.writerows(rows)
+        w.writerows([[c[2:-2] if c.startswith("**") and c.endswith("**") else c for c in r] for r in rows])
 
 
 def plot_figure(arms, path_png, path_pdf, n_boot):
@@ -358,7 +364,7 @@ def main():
              "swap. In scenario 1 nothing is replaced, so its detected proportion is also a false positive. "
              "Proportions carry exact (Clopper–Pearson) 95% intervals. ‡ Exploratory: change in the share "
              "of CHEAP choices among all three agents, rounds 4–6 minus rounds 1–3.")
-    note2 = (games + "Difference in means with 95% BCa bootstrap interval and two-sided permutation p. † p below "
+    note2 = (games + "Difference in means with 95% BCa bootstrap interval and two-sided permutation p. Bold: p below "
              f"0.05/{BONFERRONI_FAMILY} (Bonferroni over 4 contrasts × 2 measures). The interaction is reported with "
              "an interval only. Scenario 2 is the baseline for the swap contrasts.")
     title_suffix = " (games with no defection before the swap)" if args.stable_only else ""
