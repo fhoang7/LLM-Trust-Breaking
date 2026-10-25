@@ -201,6 +201,57 @@ def plot_figure(arms, path_png, path_pdf, n_boot):
     fig.savefig(path_pdf, facecolor="white")
 
 
+def plot_curve(arms, path_png, path_pdf, n_boot):
+    """Single-panel version: mean guess score by round, with room to breathe."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    first = next(iter(arms.values()))
+    swap_at, n_rounds = first["swap_at"], first["n_rounds"]
+    rounds = list(range(swap_at, n_rounds + 1))
+
+    plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 10, "axes.edgecolor": INK2,
+                         "axes.labelcolor": INK, "xtick.color": INK2, "ytick.color": INK2})
+    fig, ax = plt.subplots(figsize=(6.4, 4.3))
+    order = list(arms)
+    for i, (label, a) in enumerate(arms.items()):
+        dx = (i - (len(order) - 1) / 2) * 0.1            # offset so the five intervals sit side by side
+        cs = curve_summary(a["rows"], rounds, n_boot=n_boot)
+        pts = [(r, cs[r]) for r in rounds if cs[r]]
+        xs = [r + dx for r, _ in pts]
+        means = [c["mean"] for _, c in pts]
+        ax.errorbar(xs, means, yerr=[[m - c["lo"] for m, (_, c) in zip(means, pts)],
+                                     [c["hi"] - m for m, (_, c) in zip(means, pts)]],
+                    fmt="none", ecolor=COLORS[label], elinewidth=1.2, capsize=2.5, capthick=1.2,
+                    alpha=0.5, zorder=2)
+        ax.plot(xs, means, color=COLORS[label], linewidth=1.9, marker=MARKERS[label], markersize=6.5,
+                markeredgecolor="white", markeredgewidth=0.9, label=f"{SCENARIO[label][0]}  {SCENARIO[label][1]}",
+                zorder=3)
+
+    ax.axvline(swap_at + 0.5, color=INK2, linestyle="--", linewidth=1)
+    ax.text(swap_at + 0.54, 10.55, "swap", color=INK2, fontsize=9, va="bottom")
+    ax.axhline(5.5, color=INK2, linestyle=":", linewidth=1)
+    ax.text(rounds[-1] + 0.82, 5.65, "above this line:\nflagged", color=INK2, fontsize=8.5,
+            va="bottom", ha="right", linespacing=1.15)
+    ax.set_ylim(0.8, 11)
+    ax.set_xlim(rounds[0] - 0.35, rounds[-1] + 0.85)
+    ax.set_xticks(rounds)
+    ax.set_xticklabels([f"{r}\n(before swap)" if r == swap_at else str(r) for r in rounds])
+    ax.set_yticks([2, 4, 6, 8, 10])
+    ax.set_xlabel("Probe asked after round")
+    ax.set_ylabel("Peers' guess that Q was replaced (1\u201310)")
+    ax.grid(axis="y", color=GRID, linewidth=0.8)
+    ax.set_axisbelow(True)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    fig.legend(*ax.get_legend_handles_labels(), loc="lower center", ncol=3, frameon=False, fontsize=9,
+               handlelength=2.2, columnspacing=1.6, bbox_to_anchor=(0.5, -0.01))
+    fig.subplots_adjust(bottom=0.27, top=0.95, left=0.12, right=0.98)
+    fig.savefig(path_png, dpi=300, facecolor="white")
+    fig.savefig(path_pdf, facecolor="white")
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--arm", action="append", required=True, help="label=path (labels a-e)")
@@ -237,6 +288,8 @@ def main():
     write_csv(os.path.join(args.out_dir, f"table2_contrasts{suffix}.csv"), h2, t2)
     plot_figure(arms, os.path.join(args.out_dir, f"fig_time_to_detection{suffix}.png"),
                 os.path.join(args.out_dir, f"fig_time_to_detection{suffix}.pdf"), args.n_boot)
+    plot_curve(arms, os.path.join(args.out_dir, f"fig_detection_curve{suffix}.png"),
+               os.path.join(args.out_dir, f"fig_detection_curve{suffix}.pdf"), args.n_boot)
     print(f"Wrote tables and figure to {args.out_dir}/ (suffix '{suffix}')")
     for row in t1:
         print("  ", " | ".join(row))
