@@ -252,6 +252,81 @@ def plot_curve(arms, path_png, path_pdf, n_boot):
     fig.savefig(path_pdf, facecolor="white")
 
 
+def plot_grid(arms, path_png, path_pdf, n_boot):
+    """2x2 small multiples laid out as the design: rows = model (same / different), columns =
+    behaviour (unchanged / changed). Scenario 1 (no-op) is the grey reference in every panel."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    first = next(iter(arms.values()))
+    swap_at, n_rounds = first["swap_at"], first["n_rounds"]
+    rounds = list(range(swap_at, n_rounds + 1))
+    layout = [["b", "c"], ["d", "e"]]
+    col_titles = ["Behaviour unchanged", "Behaviour changed"]
+    row_titles = ["Same model", "Different model"]
+    REF = "#8d8c86"
+
+    plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 9.5, "axes.edgecolor": INK2,
+                         "axes.labelcolor": INK, "xtick.color": INK2, "ytick.color": INK2})
+    fig, axes = plt.subplots(2, 2, figsize=(6.6, 6.2), sharex=True, sharey=True,
+                             gridspec_kw={"hspace": 0.16, "wspace": 0.08})
+
+    def series(label):
+        cs = curve_summary(arms[label]["rows"], rounds, n_boot=n_boot)
+        pts = [(r, cs[r]) for r in rounds if cs[r]]
+        return [r for r, _ in pts], [c["mean"] for _, c in pts], [c["lo"] for _, c in pts], [c["hi"] for _, c in pts]
+
+    ref = series("a") if "a" in arms else None
+    for i, row in enumerate(layout):
+        for j, label in enumerate(row):
+            ax = axes[i][j]
+            if label not in arms:
+                ax.set_visible(False)
+                continue
+            if ref:
+                rx, rm, rlo, rhi = ref
+                ax.errorbar([x - 0.06 for x in rx], rm, yerr=[[m - l for m, l in zip(rm, rlo)],
+                            [h - m for m, h in zip(rm, rhi)]], fmt="none", ecolor=REF, elinewidth=1.2,
+                            capsize=3, capthick=1.2, alpha=0.5, zorder=1)
+                ax.plot([x - 0.06 for x in rx], rm, color=REF, linewidth=1.8, marker="o", markersize=5.5,
+                        markeredgecolor="white", markeredgewidth=0.8, zorder=2,
+                        label="1  No-op baseline (reference)")
+            xs, m, lo, hi = series(label)
+            xs = [x + 0.06 for x in xs]
+            ax.errorbar(xs, m, yerr=[[a - l for a, l in zip(m, lo)], [h - a for a, h in zip(m, hi)]],
+                        fmt="none", ecolor=COLORS[label], elinewidth=1.6, capsize=3.5, capthick=1.6,
+                        alpha=0.85, zorder=3)
+            ax.plot(xs, m, color=COLORS[label], linewidth=2.2, marker=MARKERS[label], markersize=7,
+                    markeredgecolor="white", markeredgewidth=0.9, zorder=4)
+            ax.set_title(f"{SCENARIO[label][0]}  {SCENARIO[label][1]}", loc="left", fontsize=10,
+                         color=INK, fontweight="bold", pad=5)
+            ax.axvline(swap_at + 0.5, color=INK2, linestyle="--", linewidth=1)
+            ax.axhline(5.5, color=INK2, linestyle=":", linewidth=1)
+            ax.grid(axis="y", color=GRID, linewidth=0.8)
+            ax.set_axisbelow(True)
+            for side in ("top", "right"):
+                ax.spines[side].set_visible(False)
+            ax.set_ylim(0.8, 10.9)
+            ax.set_xlim(rounds[0] - 0.4, rounds[-1] + 0.4)
+            ax.set_xticks(rounds)
+            ax.set_yticks([2, 4, 6, 8, 10])
+    axes[0][0].text(swap_at + 0.54, 10.45, "swap", color=INK2, fontsize=8.5, va="bottom")
+    axes[1][0].text(rounds[0] - 0.35, 5.65, "flagged \u2191", color=INK2, fontsize=8, va="bottom", ha="left")
+    for j, t in enumerate(col_titles):
+        fig.text(0.115 + 0.4 * (1 - 0.0) * (0.5 + j) * 1.0 + (0.0 if j == 0 else 0.03), 0.965, t, ha="center",
+                 fontsize=10.5, color=INK2)
+    for i, t in enumerate(row_titles):
+        fig.text(0.015, 0.74 - i * 0.345, t, rotation=90, va="center", fontsize=10.5, color=INK2)
+    fig.supxlabel("Probe asked after round (3 = before the swap)", fontsize=10, y=0.06, color=INK)
+    fig.supylabel("Peers' guess that Q was replaced (1\u201310)", fontsize=10, x=0.055, color=INK)
+    fig.legend(*axes[0][0].get_legend_handles_labels(), loc="lower center", frameon=False, fontsize=9,
+               handlelength=2.2, bbox_to_anchor=(0.5, 0.0))
+    fig.subplots_adjust(top=0.92, bottom=0.14, left=0.14, right=0.98)
+    fig.savefig(path_png, dpi=300, facecolor="white")
+    fig.savefig(path_pdf, facecolor="white")
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--arm", action="append", required=True, help="label=path (labels a-e)")
@@ -290,6 +365,8 @@ def main():
                 os.path.join(args.out_dir, f"fig_time_to_detection{suffix}.pdf"), args.n_boot)
     plot_curve(arms, os.path.join(args.out_dir, f"fig_detection_curve{suffix}.png"),
                os.path.join(args.out_dir, f"fig_detection_curve{suffix}.pdf"), args.n_boot)
+    plot_grid(arms, os.path.join(args.out_dir, f"fig_detection_grid{suffix}.png"),
+              os.path.join(args.out_dir, f"fig_detection_grid{suffix}.pdf"), args.n_boot)
     print(f"Wrote tables and figure to {args.out_dir}/ (suffix '{suffix}')")
     for row in t1:
         print("  ", " | ".join(row))
