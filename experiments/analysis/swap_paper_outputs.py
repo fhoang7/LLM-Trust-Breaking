@@ -150,7 +150,8 @@ def build_tables(arms, n_boot):
             ci = interaction_ci(*[[r[metric] for r in arms[k]["rows"]] for k in "edcb"], n_boot=n_boot)
             cells += ["n/a" if ci is None else
                       f"{num(ci['interaction'], 2, True)} [{num(ci['lo'], 2, True)}, {num(ci['hi'], 2, True)}]",
-                      "–", "No (interval includes 0)" if ci is not None and ci["lo"] <= 0 <= ci["hi"] else "–"]
+                      "–", "n/a" if ci is None else ("Interval includes 0" if ci["lo"] <= 0 <= ci["hi"]
+                                                     else "Interval excludes 0")]
         table2.append(cells)
     return (header1, table1), (header2, table2)
 
